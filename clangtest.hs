@@ -61,20 +61,16 @@ mkCursor c = do
   return $ Cursor' c cursorKind displayName kindSpelling spellingLocation
 
 data ClassDecl = ClassDecl Cursor' [ClassElem]
-data TypedefDecl = TypedefDecl Cursor' [Cursor'] deriving Show
 data EnumDecl = EnumDecl CT.TypeKind [Either Cursor' (Cursor',CT.TypeKind,Integer)]
-data Method = Method Cursor'
+data Method = Method Cursor' CT.Type [CT.Type]
+--data TypedefDecl = TypedefDecl Cursor' [Cursor'] deriving Show
 
---classSummary :: Class -> ClangApp s ()
---classSummary (Class c m) = liftIO $ do
---  putStrLn $ "class \"" ++ cDisplayName c ++ "\""
---  let fields :: [(String, [Cursor'])]
---      fields = filter (not . null . snd) $ M.toList m
---      showField :: (String, [Cursor']) -> IO ()
---      showField (ftype, felems) = do
---        putStrLn $ "    " ++ ftype ++ "  ("++show (length felems)++ " elements)"
---        mapM_ (\x -> putStrLn $ "        " ++ cDisplayName x) felems
---  mapM_ showField fields
+data ParmDecl = ParmDecl String ParmType
+
+data PointerType = Pointer | Reference
+data ParmType = ParmTypeRef (Bool, Bool, Bool) PointerType ParmType
+              | ParmTypeVal (Bool, Bool, Bool) CT.Type
+
 
 childMapSummary :: Map String [Cursor'] -> ClangApp s ()
 childMapSummary m = liftIO $ do
@@ -216,26 +212,47 @@ parseClass c = fmap (ClassDecl c) $ makeClassOrStructElems CXXPrivate c
 parseStruct :: Cursor' -> ClangApp s ClassDecl
 parseStruct c = fmap (ClassDecl c) $ makeClassOrStructElems CXXPublic c
 
-data ParmDecl = ParmDecl deriving Show
+parseParmType :: String -> CT.Type -> ClangApp s ParmType
+parseParmType spaces argType = do
+  cq <- CT.isConstQualifiedType    argType
+  vq <- CT.isVolatileQualifiedType argType
+  rq <- CT.isRestrictQualifiedType argType
+  let cvr = (cq,vq,rq)
+  argKind <- CT.getKind argType
+  case argKind of CT.Type_Pointer -> do
+                    pointeeType <- CT.getPointeeType argType
+                    pointeeKind <- CT.getKind pointeeType
+                    liftIO $ putStrLn $ spaces ++ "pointeeKind: " ++ show pointeeKind
+                    pt <- parseParmType (spaces ++ "  ") pointeeType
+                    return $ ParmTypeRef cvr Pointer pt
+                  CT.Type_LValueReference -> do
+                    pointeeType <- CT.getPointeeType argType
+                    pointeeKind <- CT.getKind pointeeType
+                    liftIO $ putStrLn $ spaces ++ "pointeeKind: " ++ show pointeeKind
+                    pt <- parseParmType (spaces ++ "  ") pointeeType
+                    return $ ParmTypeRef cvr Reference pt
+                  CT.Type_RValueReference -> error $ "wtf is an RValueReference?"
+                  _ -> do
+                    liftIO $ putStrLn $ spaces ++ "got unhandled argKind: " ++ show argKind
+                    pointeeType <- CT.getPointeeType argType
+                    pointeeKind <- CT.getKind pointeeType
+                    when (CT.Type_Invalid /= pointeeKind) $
+                      error "terminating recursion on pointer type"
+                    return $ ParmTypeVal cvr argType
 
 parseParmDecl :: Cursor -> CT.Type -> ClangApp s ParmDecl
 parseParmDecl argCursor argType = do
   argCursor' <- mkCursor argCursor
-  when (cKind argCursor' /= Cursor_ParmDecl) $ error "parseParmDecl got non-ParmDecl"
   argKind <- CT.getKind argType
+  argSpelling <- CT.getTypeSpelling argType >>= C.unpack
   argKindSpelling <- CT.getTypeKindSpelling argKind >>= C.unpack
-  printChildTree "  " argCursor
-  liftIO $ putStrLn $ "    " ++ show (argKind, argKindSpelling)--, argCursor')
-  case argKind of CT.Type_Pointer -> do
-                    pointeeType <- CT.getPointeeType argType
-                    pointeeKind <- CT.getKind pointeeType
-                    liftIO $ putStrLn $ "      pointeeKind: " ++ show pointeeKind
-                    return ()
-                  x -> do
-                    liftIO $ putStrLn $ "      got unhandled argKind: " ++ show x
-                    return ()
-  liftIO (putStrLn "")
-  return ParmDecl
+  liftIO $ putStrLn "  childTree:"
+  printChildTree "  --" argCursor
+  liftIO $ putStrLn $ "  display name: \"" ++ cDisplayName argCursor' ++ "\""
+  liftIO $ putStrLn $ "  spelling: " ++ show (argKind, argKindSpelling, argSpelling)
+  when (cKind argCursor' /= Cursor_ParmDecl) $ error "parseParmDecl got non-ParmDecl"
+  pt <- parseParmType "  | " argType
+  return $ ParmDecl argSpelling pt
 
 parseMethod :: Cursor' -> ClangApp s Method
 parseMethod cursor' = do
@@ -247,16 +264,20 @@ parseMethod cursor' = do
   nat <- CT.getNumArgTypes cursorType
   when (k < 0) $ error "parseMethod: num args < 0"
   when (k /= nat) $ error "parseMethod: num args /= num arg types"
-  liftIO $ putStrLn $ "method: " ++ cDisplayName cursor' ++ " (" ++ show k ++ " args)"
-  let parseParmDecl' j = do
-        argCursor <- C.getArgument cursor j
-        argType <- CT.getArgType cursorType j
-        parseParmDecl argCursor argType
-  parmDecls <- mapM parseParmDecl' (take k [0..])
-
---  liftIO $ mapM_ print argKinds
---  liftIO $ mapM_ (\x -> putStrLn $ "        " ++ show x) (zip3 argKinds argKindSpellings argCursors')
-  return (Method cursor')
+--  liftIO $ putStrLn $ "method: " ++ cDisplayName cursor' ++ " (" ++ show k ++ " args)"
+--  liftIO $ putStrLn $ cSpellingLoc cursor'
+  resType <- CT.getResultType cursorType
+--  resTypeSp <- CT.getKind resType >>= CT.getTypeKindSpelling >>= C.unpack
+--  resTypeSp' <- CT.getTypeSpelling resType >>= C.unpack
+--  liftIO $ putStrLn $ "  result type: " ++ show (resTypeSp, resTypeSp')
+--  let parseParmDecl' j = do
+--        argCursor <- C.getArgument cursor j
+--        argType <- CT.getArgType cursorType j
+--        parseParmDecl argCursor argType
+--  parmDecls <- mapM parseParmDecl' (take k [0..])
+  argTypes <- mapM (CT.getArgType cursorType) (take k [0..])
+  
+  return (Method cursor' resType argTypes)
 
 makeEnumDecl :: Cursor' -> ClangApp s EnumDecl
 makeEnumDecl cursor' = do
