@@ -143,9 +143,28 @@ data ClassElem = Class_Method Cursor'
                | Class_CXXBaseSpecifier Cursor'
                | Class_UsingDeclaration Cursor'
 
-makeClassOrStructMap :: CXXAccessSpecifier -> Cursor -> ClangApp s [ClassElem]
-makeClassOrStructMap defaultAccess cursor = do
-  cursor' <- mkCursor cursor
+
+classConstructor :: Cursor' -> Maybe (ClangApp s ClassElem)
+classConstructor c = let simple x = Just $ return $ x c in
+  case cKind c of
+    Cursor_CXXMethod          -> simple Class_Method
+    Cursor_Constructor        -> simple Class_Constructor
+    Cursor_Destructor         -> simple Class_Destructor
+    Cursor_TypedefDecl        -> simple Class_TypedefDecl
+    Cursor_VarDecl            -> simple Class_VarDecl
+    Cursor_FieldDecl          -> simple Class_FieldDecl
+    Cursor_UnexposedDecl      -> simple Class_UnexposedDecl
+    Cursor_ConversionFunction -> simple Class_CXXConversionFunction
+    Cursor_EnumDecl           -> simple Class_EnumDecl
+    Cursor_FunctionTemplate   -> simple Class_FunctionTemplate
+    Cursor_StructDecl         -> simple Class_StructDecl
+    Cursor_ClassDecl          -> simple Class_ClassDecl
+    Cursor_CXXBaseSpecifier   -> simple Class_CXXBaseSpecifier
+    Cursor_UsingDeclaration   -> simple Class_UsingDeclaration
+    _ -> Nothing
+
+makeClassOrStructElems :: CXXAccessSpecifier -> Cursor' -> ClangApp s [ClassElem]
+makeClassOrStructElems defaultAccess cursor' = do
   liftIO $ putStrLn $ "-------- parsing class/struct \""++cDisplayName cursor'++"\" ----------"
   access <- liftIO $ newIORef defaultAccess
 
@@ -160,28 +179,14 @@ makeClassOrStructMap defaultAccess cursor = do
             as <- C.getCXXAccessSpecifier c
             liftIO $ writeIORef access as
             return oldElems
-          other -> do
-            let elemConstructor :: Cursor' -> Either (String,[Cursor']) ClassElem
-                elemConstructor = case other of
-                  Cursor_CXXMethod          -> Right . Class_Method
-                  Cursor_Constructor        -> Right . Class_Constructor
-                  Cursor_Destructor         -> Right . Class_Destructor
-                  Cursor_TypedefDecl        -> Right . Class_TypedefDecl
-                  Cursor_VarDecl            -> Right . Class_VarDecl
-                  Cursor_FieldDecl          -> Right . Class_FieldDecl
-                  Cursor_UnexposedDecl      -> Right . Class_UnexposedDecl
-                  Cursor_ConversionFunction -> Right . Class_CXXConversionFunction
-                  Cursor_EnumDecl           -> Right . Class_EnumDecl
-                  Cursor_FunctionTemplate   -> Right . Class_FunctionTemplate
-                  Cursor_StructDecl         -> Right . Class_StructDecl
-                  Cursor_ClassDecl          -> Right . Class_ClassDecl
-                  Cursor_CXXBaseSpecifier   -> Right . Class_CXXBaseSpecifier
-                  Cursor_UsingDeclaration   -> Right . Class_UsingDeclaration
-                  x -> \cc -> Left (show x, [cc])
-            return $ if access' == CXXPublic then elemConstructor c':oldElems else oldElems
+          _ -> do
+            newElem <- case classConstructor c' of
+              Nothing -> return $ Left (show (cKind c'), [c'])
+              Just doSomething -> fmap Right doSomething
+            return $ if access' == CXXPublic then newElem:oldElems else oldElems
 
   (unhandled, classElems) <- fmap (partitionEithers . reverse) $
-                             myVisitChildren cursor parseClassElems []
+                             myVisitChildren (cCursor cursor') parseClassElems []
   -- check to make sure there are no unhandled fields
   unless (null unhandled) $ do
     liftIO $ putStrLn "class got unhandled elements:"
@@ -189,11 +194,11 @@ makeClassOrStructMap defaultAccess cursor = do
     error "class got unhandled elements"
   return classElems
 
-makeClassMap :: Cursor -> ClangApp s [ClassElem]
-makeClassMap = makeClassOrStructMap CXXPrivate
+makeClass :: Cursor' -> ClangApp s Class
+makeClass c = fmap (Class c) $ makeClassOrStructElems CXXPrivate c
 
-makeStructMap :: Cursor -> ClangApp s [ClassElem]
-makeStructMap = makeClassOrStructMap CXXPublic
+makeStruct :: Cursor' -> ClangApp s [ClassElem]
+makeStruct = makeClassOrStructElems CXXPublic
 
 data ParmDecl = ParmDecl deriving Show
 
@@ -261,119 +266,134 @@ data CG_Elem = CG_Class Class
              | CG_EnumDecl EnumDecl
              | CG_Constructor Constructor
 
+data Namespace = Namespace Cursor' [TopLevelElem]
 
-data TopLevelElem = TopLevel_Method Cursor'
-                  | TopLevel_Constructor Cursor'
-                  | TopLevel_Destructor Cursor'
+data TopLevelElem = TopLevel_FunctionDecl Cursor'
                   | TopLevel_TypedefDecl Cursor'
-                  | TopLevel_VarDecl Cursor'
-                  | TopLevel_FieldDecl Cursor'
                   | TopLevel_UnexposedDecl Cursor'
-                  | TopLevel_CXXConversionFunction Cursor'
                   | TopLevel_EnumDecl Cursor'
                   | TopLevel_StructDecl Cursor'
+                  | TopLevel_Namespace Namespace
+                  | TopLevel_UnionDecl Cursor'
+                  | TopLevel_ClassTemplate Cursor'
+                  | TopLevel_FirstAttr Cursor'
+                  | TopLevel_ClassTemplatePartialSpecialization Cursor'
                   | TopLevel_FunctionTemplate Cursor'
                   | TopLevel_ClassDecl Cursor'
-                  | TopLevel_CXXBaseSpecifier Cursor'
+                  | TopLevel_VarDecl Cursor'
+                  | TopLevel_CXXMethod Cursor'
+                  | TopLevel_Constructor Cursor'
+                  | TopLevel_Destructor Cursor'
+--                  | TopLevel_FieldDecl Cursor'
+                  | TopLevel_ConversionFunction Cursor'
+--                  | TopLevel_CXXBaseSpecifier Cursor'
                   | TopLevel_UsingDeclaration Cursor'
-                  | TopLevel_Namespace Cursor'
-                  | TopLevel_FunctionDecl Cursor'
-                  | TopLevel_UnionDecl Cursor'
+                  | TopLevel_UsingDirective Cursor'
 
-makeTopLevelMap :: Cursor -> ClangApp s [TopLevelElem]
-makeTopLevelMap cursor = do
-  cursor' <- mkCursor cursor
-  liftIO $ putStrLn $ "-------- parsing topLevel \""++cDisplayName cursor'++"\" ----------"
+parseNamespace :: Cursor' -> ClangApp s ([UnhandledTopLevel], Namespace)
+parseNamespace c = do
+  (uh, tles) <- makeTopLevelElems c
+  return $ (uh, Namespace c tles)
 
-  let parseTopLevelElems :: Cursor -> [Either (String,[Cursor']) TopLevelElem] ->
-                            ClangApp s [Either (String,[Cursor']) TopLevelElem]
-      parseTopLevelElems c oldElems = do
+topLevelConstructor :: Cursor' -> Maybe (ClangApp s ([UnhandledTopLevel], TopLevelElem))
+topLevelConstructor c = let simple x = Just $ return $ ([], x c) in
+  case cKind c of
+    Cursor_EnumDecl      -> simple TopLevel_EnumDecl
+    Cursor_TypedefDecl   -> simple TopLevel_TypedefDecl
+    Cursor_UnexposedDecl -> simple TopLevel_UnexposedDecl
+    Cursor_StructDecl    -> simple TopLevel_StructDecl
+    Cursor_Namespace     -> Just $ do
+      (uh, n) <- parseNamespace c
+      return (uh, TopLevel_Namespace n)
+    Cursor_FunctionDecl  -> simple TopLevel_FunctionDecl
+    Cursor_UnionDecl     -> simple TopLevel_UnionDecl
+    Cursor_ClassTemplate -> simple TopLevel_ClassTemplate
+    Cursor_FirstAttr     -> simple TopLevel_FirstAttr
+    Cursor_ClassTemplatePartialSpecialization ->
+      simple TopLevel_ClassTemplatePartialSpecialization
+    Cursor_FunctionTemplate -> simple TopLevel_FunctionTemplate
+    Cursor_ClassDecl     -> simple TopLevel_ClassDecl
+    Cursor_VarDecl       -> simple TopLevel_VarDecl
+    Cursor_CXXMethod     -> simple TopLevel_CXXMethod
+    Cursor_Constructor   -> simple TopLevel_Constructor
+    Cursor_Destructor    -> simple TopLevel_Destructor
+--              Cursor_FieldDecl          -> Right . TopLevel_FieldDecl
+    Cursor_ConversionFunction -> simple TopLevel_ConversionFunction
+--              Cursor_FunctionTemplate   -> Right . TopLevel_FunctionTemplate
+--              Cursor_CXXBaseSpecifier   -> Right . TopLevel_CXXBaseSpecifier
+    Cursor_UsingDeclaration -> simple TopLevel_UsingDeclaration
+    Cursor_UsingDirective -> simple TopLevel_UsingDirective
+    _ -> Nothing
+
+data UnhandledTopLevel = UnhandledTopLevel { fromUtl :: (String, [Cursor']) }
+
+makeTopLevelElems :: Cursor' -> ClangApp s ([UnhandledTopLevel], [TopLevelElem])
+makeTopLevelElems cursor' = do
+  let parseTopLevelElems c (oldUnhandled, oldElems) = do
         c' <- mkCursor c
-        let elemConstructor :: Cursor' -> Either (String,[Cursor']) TopLevelElem
-            elemConstructor = case cKind c' of
-              Cursor_CXXMethod          -> Right . TopLevel_Method
-              Cursor_Constructor        -> Right . TopLevel_Constructor
-              Cursor_Destructor         -> Right . TopLevel_Destructor
-              Cursor_TypedefDecl        -> Right . TopLevel_TypedefDecl
-              Cursor_VarDecl            -> Right . TopLevel_VarDecl
-              Cursor_FieldDecl          -> Right . TopLevel_FieldDecl
-              Cursor_UnexposedDecl      -> Right . TopLevel_UnexposedDecl
-              Cursor_ConversionFunction -> Right . TopLevel_CXXConversionFunction
-              Cursor_EnumDecl           -> Right . TopLevel_EnumDecl
-              Cursor_FunctionTemplate   -> Right . TopLevel_FunctionTemplate
-              Cursor_StructDecl         -> Right . TopLevel_StructDecl
-              Cursor_ClassDecl          -> Right . TopLevel_ClassDecl
-              Cursor_CXXBaseSpecifier   -> Right . TopLevel_CXXBaseSpecifier
-              Cursor_UsingDeclaration   -> Right . TopLevel_UsingDeclaration
-              Cursor_Namespace          -> Right . TopLevel_Namespace
-              Cursor_FunctionDecl       -> Right . TopLevel_FunctionDecl
-              Cursor_UnionDecl          -> Right . TopLevel_UnionDecl
-              x -> \cc -> Left (show x, [cc])
-        return $ elemConstructor c':oldElems
+        let k = cKind c'
+        case topLevelConstructor c' of
+          Nothing -> return (oldUnhandled ++ [UnhandledTopLevel (show k, [c'])], oldElems)
+          Just doSomething -> do
+            (moarUnhandled,ret) <- doSomething
+            return (oldUnhandled ++ moarUnhandled, oldElems ++ [ret])
 
-  (unhandled, topLevelElems) <- fmap (partitionEithers . reverse) $
-                                myVisitChildren cursor parseTopLevelElems []
-  -- check to make sure there are no unhandled fields
-  unless (null unhandled) $ do
-    liftIO $ putStrLn "topLevel got unhandled elements:"
-    liftIO $ mapM_ print $ M.keys $ M.fromListWith (++) unhandled
-    error "topLevel got unhandled elements"
-  return topLevelElems
+  myVisitChildren (cCursor cursor') parseTopLevelElems ([],[])
 
-visitNamespaceChild :: Cursor -> ([CG_Elem],Map String [Cursor'])
-                       -> ClangApp s ([CG_Elem],Map String [Cursor'])
-visitNamespaceChild cursor (stuff,unhandled) = do
-  cursor' <- mkCursor cursor
-  case cKind cursor' of
-       Cursor_ClassDecl -> do
-         --liftIO $ putStrLn $ "---------- parsing class \""++(cDisplayName cursor')++"\" ----------"
-         cls <- fmap (Class cursor') $ makeClassMap cursor
-         --classSummary cls
-         return (stuff ++ [CG_Class cls], unhandled)
-       Cursor_TypedefDecl -> do
-         td <- fmap (TypedefDecl cursor') $ makeChildList cursor
-         --ut <- CT.getTypedefDeclUnderlyingType cursor >>= CT.getKind
-         --liftIO $ putStrLn $ "underlying type: " ++ show ut
-         --liftIO $ print td
-         return (stuff ++ [CG_TypedefDecl td], unhandled)
-       Cursor_StructDecl -> do
-         --liftIO $ putStrLn $ "---------- parsing struct \""++(cDisplayName cursor')++"\" ----------"
-         cls <- fmap (Class cursor') $ makeStructMap cursor
-         --classSummary cls
-         return (stuff ++ [CG_StructDecl (StructDecl cls)], unhandled)
-       Cursor_EnumDecl -> do
-         --liftIO $ putStrLn $ "---------- parsing enum \""++(cDisplayName cursor')++"\" ----------"
-         enum <- makeEnum cursor
-         --liftIO $ mapM_ print cm
-         return (stuff ++ [CG_EnumDecl enum], unhandled)
-       Cursor_Constructor -> do
-         --liftIO $ putStrLn $ "------ parsing CXXConstructor \""++(cDisplayName cursor')++"\" ------"
-         --liftIO $ print cursor'
-         cm <- makeChildMap cursor
-         --childMapSummary cm
-         return (stuff ++ [CG_Constructor $ Constructor cursor' cm], unhandled)
---       Cursor_CXXMethod -> do
---         --liftIO $ putStrLn $ "\n------ parsing CXXMethod \""++(cDisplayName cursor')++"\" ------"
+
+--visitNamespaceChild :: Cursor -> ([CG_Elem],Map String [Cursor'])
+--                       -> ClangApp s ([CG_Elem],Map String [Cursor'])
+--visitNamespaceChild cursor (stuff,unhandled) = do
+--  cursor' <- mkCursor cursor
+--  case cKind cursor' of
+--       Cursor_ClassDecl -> do
+--         --liftIO $ putStrLn $ "---------- parsing class \""++(cDisplayName cursor')++"\" ----------"
+--         cls <- fmap (Class cursor') $ makeClass cursor'
+--         --classSummary cls
+--         return (stuff ++ [CG_Class cls], unhandled)
+--       Cursor_TypedefDecl -> do
+--         td <- fmap (TypedefDecl cursor') $ makeChildList cursor
+--         --ut <- CT.getTypedefDeclUnderlyingType cursor >>= CT.getKind
+--         --liftIO $ putStrLn $ "underlying type: " ++ show ut
+--         --liftIO $ print td
+--         return (stuff ++ [CG_TypedefDecl td], unhandled)
+--       Cursor_StructDecl -> do
+--         --liftIO $ putStrLn $ "---------- parsing struct \""++(cDisplayName cursor')++"\" ----------"
+--         cls <- fmap (Class cursor') $ makeStruct cursor'
+--         --classSummary cls
+--         return (stuff ++ [CG_StructDecl (StructDecl cls)], unhandled)
+--       Cursor_EnumDecl -> do
+--         --liftIO $ putStrLn $ "---------- parsing enum \""++(cDisplayName cursor')++"\" ----------"
+--         enum <- makeEnum cursor
+--         --liftIO $ mapM_ print cm
+--         return (stuff ++ [CG_EnumDecl enum], unhandled)
+--       Cursor_Constructor -> do
+--         --liftIO $ putStrLn $ "------ parsing CXXConstructor \""++(cDisplayName cursor')++"\" ------"
 --         --liftIO $ print cursor'
---         --makeMethod cursor
 --         cm <- makeChildMap cursor
 --         --childMapSummary cm
---         return $ (stuff, unhandled)
-       _ -> do
-         --liftIO $ putStrLn $ "unhandled element: " ++ show x ++ ": " ++ show cursor'
-         return (stuff, M.insertWith (++) (cKindSpelling cursor') [cursor'] unhandled)
+--         return (stuff ++ [CG_Constructor $ Constructor cursor' cm], unhandled)
+----       Cursor_CXXMethod -> do
+----         --liftIO $ putStrLn $ "\n------ parsing CXXMethod \""++(cDisplayName cursor')++"\" ------"
+----         --liftIO $ print cursor'
+----         --makeMethod cursor
+----         cm <- makeChildMap cursor
+----         --childMapSummary cm
+----         return $ (stuff, unhandled)
+--       _ -> do
+--         --liftIO $ putStrLn $ "unhandled element: " ++ show x ++ ": " ++ show cursor'
+--         return (stuff, M.insertWith (++) (cKindSpelling cursor') [cursor'] unhandled)
 
-parseNamespace :: String -> MyChildVisitor s ([[CG_Elem]], Map String [Cursor'])
-parseNamespace namespaceName cursor su@(stuff,unhandled) = do
-  c <- mkCursor cursor
-  if (cKind c, cDisplayName c) == (Cursor_Namespace,namespaceName)
-    then do (s,u) <- myVisitChildren cursor visitNamespaceChild ([],M.empty)
-            return (stuff ++ [s], M.unionWith (++) unhandled u)
-    else return su
+--parseNamespace :: String -> MyChildVisitor s ([[CG_Elem]], Map String [Cursor'])
+--parseNamespace namespaceName cursor su@(stuff,unhandled) = do
+--  c <- mkCursor cursor
+--  if (cKind c, cDisplayName c) == (Cursor_Namespace,namespaceName)
+--    then do (s,u) <- myVisitChildren cursor visitNamespaceChild ([],M.empty)
+--            return (stuff ++ [s], M.unionWith (++) unhandled u)
+--    else return su
 
-
-test :: TranslationUnit -> ClangApp s ([[CG_Elem]], Map String [Cursor'])
-test tu = do
+parseTopLevel :: TranslationUnit -> ClangApp s ([UnhandledTopLevel], [TopLevelElem])
+parseTopLevel tu = do
   C.enableStackTraces
   defDispOpts <- CD.defaultDisplayOptions
   let f [] acc0 = return acc0
@@ -387,8 +407,11 @@ test tu = do
   errs <- CD.getDiagnostics tu >>= flip f []
   unless (null errs) $ error $ "clang parsing error\n" ++ init (unlines errs)
   c <- getCursor tu
-  _ <- makeTopLevelMap c
-  myVisitChildren c (parseNamespace "Ogre") ([],M.empty)
+  c' <- mkCursor c
+  makeTopLevelElems c'
+
+mkUtlMap :: [UnhandledTopLevel] -> Map String [Cursor']
+mkUtlMap utl = M.fromListWith (flip (++)) $ map fromUtl utl
 
 main :: IO ()
 main = do
@@ -398,11 +421,15 @@ main = do
       --args = ["-x","c++"]
       args = ["-x","c++","-I/usr/local/llvm/lib/clang/3.4/include"] -- ++ ["-D__STDC_CONSTANT_MACROS", "-D__STDC_LIMIT_MACROS","-c"]
       --args = ["-x","c++","-I/usr/lib/gcc/x86_64-linux-gnu/4.7/include","-I/usr/lib/gcc/x86_64-linux-gnu/4.7/include-fixed"]
-  (stuff,unhandled) <- withCreateIndex False False $ \index ->
-      withParse index (Just filepath) args [] [TranslationUnit_None] test (error "No TXUnit!")
-  putStrLn "unhandled:"
-  mapM_ print (M.keys unhandled)
+  (unhandledTl,_) <- withCreateIndex False False $ \index ->
+    withParse index (Just filepath) args [] [TranslationUnit_None] parseTopLevel (error "No TXUnit!")
 
---  print stuff
-  
+  unless (null unhandledTl) $ do
+    let utlMap = mkUtlMap unhandledTl
+    liftIO $ putStrLn "\n--------------- topLevel got unhandled elements: ---------------"
+    liftIO $ mapM_ print $ M.toList utlMap
+    liftIO $ putStrLn "\n------------- keys: ------------"
+    liftIO $ mapM_ putStrLn $ M.keys utlMap
+    liftIO $ putStrLn "\n--------------------------------"
+    error "topLevel got unhandled elements"
   return ()
