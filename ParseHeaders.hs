@@ -2,6 +2,7 @@
 
 module ParseHeaders ( parseHeaders
                     , parseTopLevel
+                    , mkCursor
                     , Cursor'(..)
                     , TopLevelElem(..)
                     , ClassDecl(..)
@@ -10,6 +11,7 @@ module ParseHeaders ( parseHeaders
                     , Namespace(..)
                       --            , TypedefDecl(..)
                     , EnumDecl(..)
+                    , Method(..)
                       --            , Class(..)
                       --            , classSummary
                     , childMapSummary
@@ -135,7 +137,7 @@ makeChildList cursor = do
         return $ oldList ++ [c']
   myVisitChildren cursor makeMap []
 
-data ClassElem = Class_Method Cursor'
+data ClassElem = Class_Method Method
                | Class_Constructor Cursor'
                | Class_Destructor Cursor'
                | Class_TypedefDecl Cursor'
@@ -163,7 +165,7 @@ data ClassElem = Class_Method Cursor'
 classConstructor :: Cursor' -> Maybe (ClangApp s ClassElem)
 classConstructor c = let simple x = Just $ return $ x c in
   case cKind c of
-    Cursor_CXXMethod          -> simple Class_Method
+    Cursor_CXXMethod          -> Just $ fmap Class_Method (parseMethod c)
     Cursor_Constructor        -> simple Class_Constructor
     Cursor_Destructor         -> simple Class_Destructor
     Cursor_TypedefDecl        -> simple Class_TypedefDecl
@@ -278,18 +280,18 @@ parseMethod cursor' = do
   when (k /= nat) $ error "parseMethod: num args /= num arg types"
 --  liftIO $ putStrLn $ "method: " ++ cDisplayName cursor' ++ " (" ++ show k ++ " args)"
 --  liftIO $ putStrLn $ cSpellingLoc cursor'
-  resType <- CT.getResultType cursorType
---  resTypeSp <- CT.getKind resType >>= CT.getTypeKindSpelling >>= C.unpack
---  resTypeSp' <- CT.getTypeSpelling resType >>= C.unpack
---  liftIO $ putStrLn $ "  result type: " ++ show (resTypeSp, resTypeSp')
+  retType <- CT.getResultType cursorType
+--  retTypeSp <- CT.getKind retType >>= CT.getTypeKindSpelling >>= C.unpack
+--  retTypeSp' <- CT.getTypeSpelling retType >>= C.unpack
+--  liftIO $ putStrLn $ "  result type: " ++ show (retTypeSp, retTypeSp')
 --  let parseParmDecl' j = do
 --        argCursor <- C.getArgument cursor j
 --        argType <- CT.getArgType cursorType j
 --        parseParmDecl argCursor argType
 --  parmDecls <- mapM parseParmDecl' (take k [0..])
   argTypes <- mapM (CT.getArgType cursorType) (take k [0..])
-  
-  return (Method cursor' resType argTypes)
+
+  return (Method cursor' retType argTypes)
 
 parseEnumDecl :: Cursor' -> ClangApp s EnumDecl
 parseEnumDecl cursor' = do

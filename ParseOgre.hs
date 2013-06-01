@@ -1,5 +1,6 @@
 {-# OPTIONS_GHC -Wall #-}
 {-# Language FlexibleContexts #-}
+{-# Language TemplateHaskell #-}
 
 module ParseOgre ( main
                  , CGWriterOut(..)
@@ -11,20 +12,18 @@ import Control.Monad.State.Lazy -- ( WriterT )
 --import Control.Monad.IO.Class ( liftIO )
 import Clang ( ClangApp )
 --import Clang.Cursor ( Cursor, CursorKind(..) )
---import qualified Clang as C
---import qualified Clang.Diagnostic as CD
---import qualified Clang.Source as CS
---import qualified Clang.Type as CT
---import Clang.Traversal ( ChildVisitResult(..) )
+import Clang.Cursor ( CursorKind(..) )
+import qualified Clang as C
+import qualified Clang.Type as CT
 import Clang.TranslationUnit ( TranslationUnit, TranslationUnitFlags(..),
                                withCreateIndex, withParse )
---import Clang.Type ( CXXAccessSpecifier(..) )
 --import Data.IORef ( newIORef, readIORef, writeIORef )
+import Data.Char ( toLower )
 import Data.Either ( partitionEithers )
 --oimport Data.List ( partition )
 import Data.Maybe ( mapMaybe )
---import Data.Map ( Map )
---import qualified Data.Map as M
+import Data.Map ( Map )
+import qualified Data.Map as M
 import Language.Haskell.TH
 
 import ParseHeaders
@@ -38,7 +37,8 @@ main = do
       args = ["-x","c++","-I/usr/local/llvm/lib/clang/3.4/include"] -- ++ ["-D__STDC_CONSTANT_MACROS", "-D__STDC_LIMIT_MACROS","-c"]
       --args = ["-x","c++","-I/usr/lib/gcc/x86_64-linux-gnu/4.7/include","-I/usr/lib/gcc/x86_64-linux-gnu/4.7/include-fixed"]
   cgOut <- myParseHeaders filepath args
-  mapM_ putStrLn (cgUnhandled cgOut)
+  mapM_ putStrLn (M.keys $ cgUnhandledCe cgOut)
+  mapM_ putStrLn (M.keys $ cgUnhandledTle cgOut)
   return ()
 
 callWriteCode :: TranslationUnit -> ClangApp s CGWriterOut
@@ -53,19 +53,25 @@ myParseHeaders filepath args = do
     withParse index (Just filepath) args [] [TranslationUnit_None] callWriteCode (error "No TXUnit!")
 
 -------------------------------------------------------------------
-data CGWriterOut = CGWriterOut { cgUnhandled :: [String]
+data CGWriterOut = CGWriterOut { cgUnhandledCe :: Map String [Cursor']
+                               , cgUnhandledTle :: Map String [Cursor']
                                , cgC :: [String]
                                , cgHaskell :: [String]
                                }
 cgEmpty :: CGWriterOut
-cgEmpty = CGWriterOut [] [] []
+cgEmpty = CGWriterOut M.empty M.empty [] []
 
 type CGWriter s a = StateT CGWriterOut (ClangApp s) a
 
-unhandled :: MonadState CGWriterOut m => String -> m ()
-unhandled x = do
+unhandledCe :: MonadState CGWriterOut m => (CursorKind, Cursor') -> m ()
+unhandledCe (ck, c) = do
   cg <- get
-  put $ cg {cgUnhandled = cgUnhandled cg ++ [x]}
+  put $ cg {cgUnhandledCe = M.insertWith (++) (show ck) [c] (cgUnhandledCe cg)}
+
+unhandledTle :: MonadState CGWriterOut m => (CursorKind, Cursor') -> m ()
+unhandledTle (ck, c) = do
+  cg <- get
+  put $ cg {cgUnhandledTle = M.insertWith (++) (show ck) [c] (cgUnhandledTle cg)}
 
 writeHaskell :: MonadState CGWriterOut m => String -> m ()
 writeHaskell x = do
@@ -80,27 +86,102 @@ toNiceEnum (EnumDecl name loc _ fields) = case partitionEithers fields of
 writeEnumDecl :: (MonadIO m, MonadState CGWriterOut m) => EnumDecl -> m ()
 writeEnumDecl ed@(EnumDecl name loc _ _) = do
   let elems = toNiceEnum ed
---  writeHaskell "data 
-  liftIO $ mapM_ print elems
-  let cons = map (flip normalC [] . mkName . fst) elems
+      cons = map (flip normalC [] . mkName . fst) elems
   hsEnum <- liftIO $ runQ $ dataD (cxt []) (mkName name) [] cons []
   hsEnumInstance <- liftIO $ runQ $ mkEnumInstance name elems
-  
-  writeHaskell $ "-- EnumDecl: " ++ name ++ ", " ++ loc
+
+  writeHaskell $ "-- EnumDecl: " ++ name ++ " " ++ loc
   writeHaskell (pprint $ hsEnum)
   writeHaskell (pprint $ hsEnumInstance)
+  writeHaskell ""
 
+getParents' :: C.Cursor -> [String] -> ClangApp s [String]
+getParents' c acc = do
+  pc <- C.getSemanticParent c
+  cursorKind <-  C.getKind pc
+  displayName <- C.getDisplayName pc >>= C.unpack
+  let next = getParents' pc $ acc ++ [displayName]
+  case cursorKind of Cursor_ClassDecl -> next
+                     Cursor_Namespace -> next
+                     Cursor_TranslationUnit -> return (reverse acc)
+                     x -> error $ "getParents unhandled: " ++ show x
+
+lowerCase :: String -> String
+lowerCase [] = []
+lowerCase (x:xs) = toLower x:xs
+
+getParents :: C.Cursor -> ClangApp s (String, String, String)
+getParents c = do
+  blahs <- getParents' c []
+  return (concatMap (++ "::") blahs, concatMap (++ "_") blahs, lowerCase $ concatMap (++ "_") blahs)
+
+insertCommas :: [String] -> String
+insertCommas [] = ""
+insertCommas [x] = x
+insertCommas (x:xs) = x ++ ", " ++ insertCommas xs
+
+insertCommasAndArgs' :: Int -> [String] -> String
+insertCommasAndArgs' _ [] = ""
+insertCommasAndArgs' k [x] = x ++ " x" ++ show k
+insertCommasAndArgs' k (x:xs) = x ++ " x" ++ show k ++ ", " ++ insertCommasAndArgs' (k+1) xs
+
+insertCommasAndNames :: [String] -> String
+insertCommasAndNames = insertCommasAndArgs' 0
+
+writeNonStaticClassMethod :: MonadIO m => String -> String -> String -> String -> [String] -> m b
+writeNonStaticClassMethod  = do
+  error "writeNonStaticClassMethod unimplemented"
+
+writeStaticClassMethod
+  :: MonadState CGWriterOut m =>
+     String -> String -> String -> String -> String -> [String] -> m ()
+writeStaticClassMethod retTypeSp' cContext cppContext name loc ats = do
+  let args = insertCommas ats
+      argsWithNames = insertCommasAndNames ats
+      proto args' = retTypeSp' ++ " " ++ cContext ++ name ++ "(" ++ args' ++ ")"
+      ret = init $ unlines $
+            [ "// static class method"
+            , "// " ++ loc
+            , "extern \"C\" " ++ proto args ++ ";"
+            , proto argsWithNames ++ " {"
+            , "    " ++ "return " ++ cppContext ++ name ++ "(" ++ argsWithNames ++ ");"
+            , "}"
+            ]
+  writeHaskell ret
+
+writeClassMethod
+  :: (MonadTrans t, MonadState CGWriterOut (t (ClangApp s))) =>
+     Method -> t (ClangApp s) ()
+writeClassMethod (Method c' retType argTypes) = do
+  let c = cCursor c'
+  static  <- lift $ C.isStaticCppMethod c
+  virtual <- lift $ C.isVirtualCppMethod c
+
+  retTypeSp' <- lift $ CT.getTypeSpelling retType >>= C.unpack
+  (cppContext, cContext, _hsContext) <- lift $ getParents c
+  name <- lift $ C.getSpelling c >>= C.unpack
+
+  let getArgType at = lift $ CT.getTypeSpelling at >>= C.unpack
+  ats <- mapM getArgType argTypes
+  when virtual $ error "how to write virtual method???"
+  if static
+    then writeStaticClassMethod retTypeSp' cContext cppContext name (cSpellingLoc c') ats
+    else undefined
 
 writeClassElem :: ClassElem -> CGWriter s ()
 --  liftIO $ putStrLn c
+writeClassElem (Class_Method m) = writeClassMethod m
 writeClassElem c = error $ "writeClassElem: unhandled " ++ show c
-  
+
 writeTle :: TopLevelElem -> CGWriter s ()
 writeTle (TopLevel_TypedefDecl {}) = return ()
 writeTle (TopLevel_ClassDecl (ClassDecl _ elems)) = mapM_ writeClassElem elems
 writeTle (TopLevel_StructDecl (ClassDecl _ elems)) = mapM_ writeClassElem elems
-writeTle (TopLevel_ClassTemplate c) = unhandled $ "ClassTemplate: " ++ show c
 writeTle (TopLevel_EnumDecl ed) = writeEnumDecl ed
+writeTle (TopLevel_ClassTemplate c) = unhandledTle (Cursor_ClassTemplate, c)
+writeTle (TopLevel_ClassTemplatePartialSpecialization c) =
+  unhandledTle (Cursor_ClassTemplatePartialSpecialization, c)
+writeTle (TopLevel_FunctionTemplate c) = unhandledTle (Cursor_FunctionTemplate, c)
 writeTle x = error $ "unhandled tle: " ++ show x
 
 writeNamespace :: Namespace -> CGWriter s ()
@@ -115,16 +196,16 @@ mkEnumInstance name fields = ins
   where
     fe = funD (mkName "fromEnum") (map toClause fields)
     toClause (nm,j) = clause [conP (mkName nm) []] (normalB (litE (integerL j))) []
-    
+
     te = funD (mkName "toEnum") $ map toClause' fields ++ [wild]
     toClause' (nm,j) = clause [litP (integerL j)] (normalB (conE (mkName nm))) []
     k = mkName "k"
     wild = clause [varP k]
            (normalB [| error $ "toEnum " ++ name ++
                        " got unhandled number: "++ show $(varE k) |]) []
-  
+
     ins = instanceD (cxt []) [t| Enum $(conT (mkName name)) |] [fe,te]
-      
+
 
 
 writeCode :: [TopLevelElem] -> CGWriter s ()
@@ -135,9 +216,5 @@ writeCode tls = do
         | otherwise = Nothing
       f _ = Nothing
       ogreNamespaces = mapMaybe f tls
-      
+
   mapM_ writeNamespace ogreNamespaces
-  
-
-
-  
