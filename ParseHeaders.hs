@@ -73,16 +73,14 @@ instance Show ClassDecl where
 data EnumDecl = EnumDecl String String CT.TypeKind [Either Cursor' (String, String, Integer)]
 instance Show EnumDecl where
   show (EnumDecl tc _ _ _) = "EnumDecl " ++ tc
-data Method = Method Cursor' CT.Type [CT.Type]
-instance Show Method where
-  show (Method c _ _) = "Method " ++ show c
---data TypedefDecl = TypedefDecl Cursor' [Cursor'] deriving Show
-
---data ParmDecl = ParmDecl String ParmType
-
---data PointerType = Pointer | Reference
---data ParmType = ParmTypeRef (Bool, Bool, Bool) PointerType ParmType
---              | ParmTypeVal (Bool, Bool, Bool) CT.Type
+data Method = Method { mName :: String
+                     , mStatic :: Bool
+                     , mVirtual :: Bool
+                     , mRetType :: String
+                     , mArgTypes :: [String]
+                     , mLoc :: String
+                     , mContext :: [String]
+                     } deriving Show
 
 
 childMapSummary :: Map String [Cursor'] -> ClangApp s ()
@@ -254,19 +252,22 @@ parseStruct c = fmap (ClassDecl c) $ makeClassOrStructElems CXXPublic c
 --                      error "terminating recursion on pointer type"
 --                    return $ ParmTypeVal cvr argType
 
---parseParmDecl :: Cursor -> CT.Type -> ClangApp s ParmDecl
---parseParmDecl argCursor argType = do
---  argCursor' <- mkCursor argCursor
---  argKind <- CT.getKind argType
---  argSpelling <- CT.getTypeSpelling argType >>= C.unpack
---  argKindSpelling <- CT.getTypeKindSpelling argKind >>= C.unpack
---  liftIO $ putStrLn "  childTree:"
---  printChildTree "  --" argCursor
---  liftIO $ putStrLn $ "  display name: \"" ++ cDisplayName argCursor' ++ "\""
---  liftIO $ putStrLn $ "  spelling: " ++ show (argKind, argKindSpelling, argSpelling)
---  when (cKind argCursor' /= Cursor_ParmDecl) $ error "parseParmDecl got non-ParmDecl"
---  pt <- parseParmType "  | " argType
---  return $ ParmDecl argSpelling pt
+getContext' :: C.Cursor -> [String] -> ClangApp s [String]
+getContext' c acc = do
+  pc <- C.getSemanticParent c
+  cursorKind <-  C.getKind pc
+  displayName <- C.getDisplayName pc >>= C.unpack
+  let next = getContext' pc $ acc ++ [displayName]
+  case cursorKind of Cursor_ClassDecl -> next
+                     Cursor_StructDecl -> next
+                     Cursor_Namespace -> next
+                     Cursor_ClassTemplate -> next
+                     Cursor_ClassTemplatePartialSpecialization -> next
+                     Cursor_TranslationUnit -> return (reverse acc)
+                     x -> error $ "getContext' unhandled: " ++ show x
+
+getContext :: C.Cursor -> ClangApp s [String]
+getContext c = getContext' c []
 
 parseMethod :: Cursor' -> ClangApp s Method
 parseMethod cursor' = do
@@ -278,20 +279,27 @@ parseMethod cursor' = do
   nat <- CT.getNumArgTypes cursorType
   when (k < 0) $ error "parseMethod: num args < 0"
   when (k /= nat) $ error "parseMethod: num args /= num arg types"
---  liftIO $ putStrLn $ "method: " ++ cDisplayName cursor' ++ " (" ++ show k ++ " args)"
---  liftIO $ putStrLn $ cSpellingLoc cursor'
-  retType <- CT.getResultType cursorType
---  retTypeSp <- CT.getKind retType >>= CT.getTypeKindSpelling >>= C.unpack
---  retTypeSp' <- CT.getTypeSpelling retType >>= C.unpack
---  liftIO $ putStrLn $ "  result type: " ++ show (retTypeSp, retTypeSp')
---  let parseParmDecl' j = do
---        argCursor <- C.getArgument cursor j
---        argType <- CT.getArgType cursorType j
---        parseParmDecl argCursor argType
---  parmDecls <- mapM parseParmDecl' (take k [0..])
-  argTypes <- mapM (CT.getArgType cursorType) (take k [0..])
 
-  return (Method cursor' retType argTypes)
+  static  <- C.isStaticCppMethod cursor
+  virtual <- C.isVirtualCppMethod cursor
+
+  context <- getContext cursor
+
+  retType <- CT.getResultType cursorType
+  retTypeSp <- CT.getTypeSpelling retType >>= C.unpack
+  argTypesSp <- mapM (\j -> CT.getArgType cursorType j >>= CT.getTypeSpelling >>= C.unpack)
+                (take k [0..])
+
+  name <- C.getSpelling cursor >>= C.unpack
+
+  return $ Method { mName = name
+                  , mStatic = static
+                  , mVirtual = virtual
+                  , mRetType = retTypeSp
+                  , mArgTypes = argTypesSp
+                  , mLoc = cSpellingLoc cursor'
+                  , mContext = context
+                  }
 
 parseEnumDecl :: Cursor' -> ClangApp s EnumDecl
 parseEnumDecl cursor' = do

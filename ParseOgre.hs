@@ -13,8 +13,7 @@ import Control.Monad.State.Lazy -- ( WriterT )
 import Clang ( ClangApp )
 --import Clang.Cursor ( Cursor, CursorKind(..) )
 import Clang.Cursor ( CursorKind(..) )
-import qualified Clang as C
-import qualified Clang.Type as CT
+--import qualified Clang.Type as CT
 import Clang.TranslationUnit ( TranslationUnit, TranslationUnitFlags(..),
                                withCreateIndex, withParse )
 --import Data.IORef ( newIORef, readIORef, writeIORef )
@@ -63,13 +62,13 @@ cgEmpty = CGWriterOut M.empty M.empty [] []
 
 type CGWriter s a = StateT CGWriterOut (ClangApp s) a
 
-unhandledCe :: MonadState CGWriterOut m => (CursorKind, Cursor') -> m ()
-unhandledCe (ck, c) = do
+unhandledCe :: MonadState CGWriterOut m => CursorKind -> Cursor' -> m ()
+unhandledCe ck c = do
   cg <- get
   put $ cg {cgUnhandledCe = M.insertWith (++) (show ck) [c] (cgUnhandledCe cg)}
 
-unhandledTle :: MonadState CGWriterOut m => (CursorKind, Cursor') -> m ()
-unhandledTle (ck, c) = do
+unhandledTle :: MonadState CGWriterOut m => CursorKind -> Cursor' -> m ()
+unhandledTle ck c = do
   cg <- get
   put $ cg {cgUnhandledTle = M.insertWith (++) (show ck) [c] (cgUnhandledTle cg)}
 
@@ -95,25 +94,9 @@ writeEnumDecl ed@(EnumDecl name loc _ _) = do
   writeHaskell (pprint $ hsEnumInstance)
   writeHaskell ""
 
-getParents' :: C.Cursor -> [String] -> ClangApp s [String]
-getParents' c acc = do
-  pc <- C.getSemanticParent c
-  cursorKind <-  C.getKind pc
-  displayName <- C.getDisplayName pc >>= C.unpack
-  let next = getParents' pc $ acc ++ [displayName]
-  case cursorKind of Cursor_ClassDecl -> next
-                     Cursor_Namespace -> next
-                     Cursor_TranslationUnit -> return (reverse acc)
-                     x -> error $ "getParents unhandled: " ++ show x
-
 lowerCase :: String -> String
 lowerCase [] = []
 lowerCase (x:xs) = toLower x:xs
-
-getParents :: C.Cursor -> ClangApp s (String, String, String)
-getParents c = do
-  blahs <- getParents' c []
-  return (concatMap (++ "::") blahs, concatMap (++ "_") blahs, lowerCase $ concatMap (++ "_") blahs)
 
 insertCommas :: [String] -> String
 insertCommas [] = ""
@@ -152,25 +135,27 @@ writeStaticClassMethod retTypeSp' cContext cppContext name loc ats = do
 writeClassMethod
   :: (MonadTrans t, MonadState CGWriterOut (t (ClangApp s))) =>
      Method -> t (ClangApp s) ()
-writeClassMethod (Method c' retType argTypes) = do
-  let c = cCursor c'
-  static  <- lift $ C.isStaticCppMethod c
-  virtual <- lift $ C.isVirtualCppMethod c
+writeClassMethod m = do
 
-  retTypeSp' <- lift $ CT.getTypeSpelling retType >>= C.unpack
-  (cppContext, cContext, _hsContext) <- lift $ getParents c
-  name <- lift $ C.getSpelling c >>= C.unpack
+  let cppContext = concatMap (++ "::") (mContext m)
+      cContext =  concatMap (++ "_") (mContext m)
+      --hsContext = lowerCase $ concatMap (++ "_") (mContext m)
 
-  let getArgType at = lift $ CT.getTypeSpelling at >>= C.unpack
-  ats <- mapM getArgType argTypes
-  when virtual $ error "how to write virtual method???"
-  if static
-    then writeStaticClassMethod retTypeSp' cContext cppContext name (cSpellingLoc c') ats
+  when (mVirtual m) $ error "how to write virtual method???"
+  if (mStatic m)
+    then writeStaticClassMethod (mRetType m) cContext cppContext (mName m) (mLoc m) (mArgTypes m)
     else undefined
+
+writeVarDecl c = do
+  liftIO $ putStrLn $ "----------- writing var decl --------------"
+  liftIO $ print c
+  undefined
 
 writeClassElem :: ClassElem -> CGWriter s ()
 --  liftIO $ putStrLn c
-writeClassElem (Class_Method m) = writeClassMethod m
+writeClassElem (Class_Method x) = writeClassMethod x
+writeClassElem (Class_TypedefDecl c) = unhandledCe Cursor_TypedefDecl c
+writeClassElem (Class_VarDecl c) = writeVarDecl c
 writeClassElem c = error $ "writeClassElem: unhandled " ++ show c
 
 writeTle :: TopLevelElem -> CGWriter s ()
@@ -178,16 +163,14 @@ writeTle (TopLevel_TypedefDecl {}) = return ()
 writeTle (TopLevel_ClassDecl (ClassDecl _ elems)) = mapM_ writeClassElem elems
 writeTle (TopLevel_StructDecl (ClassDecl _ elems)) = mapM_ writeClassElem elems
 writeTle (TopLevel_EnumDecl ed) = writeEnumDecl ed
-writeTle (TopLevel_ClassTemplate c) = unhandledTle (Cursor_ClassTemplate, c)
+writeTle (TopLevel_ClassTemplate c) = unhandledTle Cursor_ClassTemplate c
 writeTle (TopLevel_ClassTemplatePartialSpecialization c) =
-  unhandledTle (Cursor_ClassTemplatePartialSpecialization, c)
-writeTle (TopLevel_FunctionTemplate c) = unhandledTle (Cursor_FunctionTemplate, c)
+  unhandledTle Cursor_ClassTemplatePartialSpecialization c
+writeTle (TopLevel_FunctionTemplate c) = unhandledTle Cursor_FunctionTemplate c
 writeTle x = error $ "unhandled tle: " ++ show x
 
 writeNamespace :: Namespace -> CGWriter s ()
-writeNamespace (Namespace c tles []) = do
-  liftIO $ putStrLn $ "-------- writing namespace " ++ cDisplayName c ++ ": " ++  cSpellingLoc c
-  mapM_ writeTle tles
+writeNamespace (Namespace _ tles []) = mapM_ writeTle tles
 writeNamespace (Namespace c _ xs) = error $ "writeNamespace: " ++ show c ++ "\ngot unhandled top level elements: " ++ show (map fromUtl xs)
 
 
