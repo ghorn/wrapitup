@@ -1,16 +1,17 @@
 {-# OPTIONS_GHC -Wall #-}
 
 module Main ( main
-            , CG_Elem(..)
-            , TypedefDecl(..)
+            , Cursor'(..)
             , TopLevelElem(..)
             , ClassElem(..)
-            , EnumDecl(..)
-            , Class(..)
-            , Cursor'(..)
+            , UnhandledTopLevel(..)
+--            , TypedefDecl(..)
+--            , EnumDecl(..)
+--            , Class(..)
 --            , classSummary
             , childMapSummary
             , makeChildMap
+            , makeChildList
             , printChildTree
             ) where
 
@@ -59,11 +60,10 @@ mkCursor c = do
       return $ show (x',y,z,w)
   return $ Cursor' c cursorKind displayName kindSpelling spellingLocation
 
-data Class = Class Cursor' [ClassElem]
+data ClassDecl = ClassDecl Cursor' [ClassElem]
 data TypedefDecl = TypedefDecl Cursor' [Cursor'] deriving Show
-data StructDecl = StructDecl Class
-data EnumDecl = EnumDecl CT.TypeKind [(Cursor',CT.TypeKind,Integer)]
-data Constructor = Constructor Cursor' (Map String [Cursor'])
+data EnumDecl = EnumDecl CT.TypeKind [Either Cursor' (Cursor',CT.TypeKind,Integer)]
+data Method = Method Cursor'
 
 --classSummary :: Class -> ClangApp s ()
 --classSummary (Class c m) = liftIO $ do
@@ -136,13 +136,21 @@ data ClassElem = Class_Method Cursor'
                | Class_FieldDecl Cursor'
                | Class_UnexposedDecl Cursor'
                | Class_CXXConversionFunction Cursor'
-               | Class_EnumDecl Cursor'
+               | Class_EnumDecl EnumDecl
                | Class_StructDecl Cursor'
                | Class_FunctionTemplate Cursor'
                | Class_ClassDecl Cursor'
                | Class_CXXBaseSpecifier Cursor'
+               | Class_CXXBoolLiteralExpr Cursor'
                | Class_UsingDeclaration Cursor'
-
+               | Class_TypeRef Cursor'
+               | Class_UnionDecl Cursor'
+               | Class_ClassTemplate Cursor'
+               | Class_FirstAttr Cursor'
+               | Class_IntegerLiteral Cursor'
+               | Class_TemplateRef Cursor'
+               | Class_NamespaceRef Cursor'
+               | Class_UnaryOperator Cursor'
 
 classConstructor :: Cursor' -> Maybe (ClangApp s ClassElem)
 classConstructor c = let simple x = Just $ return $ x c in
@@ -155,17 +163,25 @@ classConstructor c = let simple x = Just $ return $ x c in
     Cursor_FieldDecl          -> simple Class_FieldDecl
     Cursor_UnexposedDecl      -> simple Class_UnexposedDecl
     Cursor_ConversionFunction -> simple Class_CXXConversionFunction
-    Cursor_EnumDecl           -> simple Class_EnumDecl
+    Cursor_EnumDecl           -> Just $ fmap Class_EnumDecl (makeEnumDecl c)
     Cursor_FunctionTemplate   -> simple Class_FunctionTemplate
     Cursor_StructDecl         -> simple Class_StructDecl
     Cursor_ClassDecl          -> simple Class_ClassDecl
     Cursor_CXXBaseSpecifier   -> simple Class_CXXBaseSpecifier
     Cursor_UsingDeclaration   -> simple Class_UsingDeclaration
+    Cursor_CXXBoolLiteralExpr -> simple Class_CXXBoolLiteralExpr
+    Cursor_TypeRef            -> simple Class_TypeRef
+    Cursor_UnionDecl          -> simple Class_UnionDecl
+    Cursor_ClassTemplate      -> simple Class_ClassTemplate
+    Cursor_FirstAttr          -> simple Class_FirstAttr
+    Cursor_IntegerLiteral     -> simple Class_IntegerLiteral
+    Cursor_TemplateRef        -> simple Class_TemplateRef
+    Cursor_NamespaceRef       -> simple Class_NamespaceRef
+    Cursor_UnaryOperator      -> simple Class_UnaryOperator
     _ -> Nothing
 
 makeClassOrStructElems :: CXXAccessSpecifier -> Cursor' -> ClangApp s [ClassElem]
 makeClassOrStructElems defaultAccess cursor' = do
-  liftIO $ putStrLn $ "-------- parsing class/struct \""++cDisplayName cursor'++"\" ----------"
   access <- liftIO $ newIORef defaultAccess
 
   let parseClassElems :: Cursor -> [Either (String,[Cursor']) ClassElem] ->
@@ -194,11 +210,11 @@ makeClassOrStructElems defaultAccess cursor' = do
     error "class got unhandled elements"
   return classElems
 
-makeClass :: Cursor' -> ClangApp s Class
-makeClass c = fmap (Class c) $ makeClassOrStructElems CXXPrivate c
+parseClass :: Cursor' -> ClangApp s ClassDecl
+parseClass c = fmap (ClassDecl c) $ makeClassOrStructElems CXXPrivate c
 
-makeStruct :: Cursor' -> ClangApp s [ClassElem]
-makeStruct = makeClassOrStructElems CXXPublic
+parseStruct :: Cursor' -> ClangApp s ClassDecl
+parseStruct c = fmap (ClassDecl c) $ makeClassOrStructElems CXXPublic c
 
 data ParmDecl = ParmDecl deriving Show
 
@@ -208,31 +224,30 @@ parseParmDecl argCursor argType = do
   when (cKind argCursor' /= Cursor_ParmDecl) $ error "parseParmDecl got non-ParmDecl"
   argKind <- CT.getKind argType
   argKindSpelling <- CT.getTypeKindSpelling argKind >>= C.unpack
-  printChildTree "    ++++" argCursor
-  liftIO $ putStrLn $ "    +++-" ++ show (argKind, argKindSpelling)--, argCursor')
+  printChildTree "  " argCursor
+  liftIO $ putStrLn $ "    " ++ show (argKind, argKindSpelling)--, argCursor')
   case argKind of CT.Type_Pointer -> do
                     pointeeType <- CT.getPointeeType argType
                     pointeeKind <- CT.getKind pointeeType
-                    liftIO $ putStrLn $ "    ====pointeeKind: " ++ show pointeeKind
+                    liftIO $ putStrLn $ "      pointeeKind: " ++ show pointeeKind
                     return ()
                   x -> do
-                    liftIO $ putStrLn $ "    ====got unhandled argKind: " ++ show x
+                    liftIO $ putStrLn $ "      got unhandled argKind: " ++ show x
                     return ()
   liftIO (putStrLn "")
   return ParmDecl
 
-
-makeMethod :: Cursor -> ClangApp s ()
-makeMethod cursor = do
-  cursor' <- mkCursor cursor
+parseMethod :: Cursor' -> ClangApp s Method
+parseMethod cursor' = do
+  let cursor = cCursor cursor'
   k <- C.getNumArguments cursor
   cursorType <- C.getType cursor
   variadic <- CT.isFunctionTypeVariadic cursorType
-  when variadic $ error "variadic"
+  when variadic $ error "parseMethod: variadic"
   nat <- CT.getNumArgTypes cursorType
-  when (k < 0) $ error "num args < 0"
-  when (k /= nat) $ error "num args /= num arg types"
-  liftIO $ putStrLn $ "    method: " ++ cDisplayName cursor' ++ " (" ++ show k ++ " args)"
+  when (k < 0) $ error "parseMethod: num args < 0"
+  when (k /= nat) $ error "parseMethod: num args /= num arg types"
+  liftIO $ putStrLn $ "method: " ++ cDisplayName cursor' ++ " (" ++ show k ++ " args)"
   let parseParmDecl' j = do
         argCursor <- C.getArgument cursor j
         argType <- CT.getArgType cursorType j
@@ -241,10 +256,11 @@ makeMethod cursor = do
 
 --  liftIO $ mapM_ print argKinds
 --  liftIO $ mapM_ (\x -> putStrLn $ "        " ++ show x) (zip3 argKinds argKindSpellings argCursors')
-  return ()
+  return (Method cursor')
 
-makeEnum :: Cursor -> ClangApp s EnumDecl
-makeEnum cursor = do
+makeEnumDecl :: Cursor' -> ClangApp s EnumDecl
+makeEnumDecl cursor' = do
+  let cursor = cCursor cursor'
   tp <- CT.getEnumDeclIntegerType cursor >>= CT.getKind
   -- liftIO $ putStrLn $ "getEnumDeclIntegerType: " ++ show tp
   let getInteger = case tp of
@@ -255,56 +271,51 @@ makeEnum cursor = do
         c' <- mkCursor c
         case cKind c' of Cursor_EnumConstantDecl -> do
                            v  <- getInteger c
-                           return $ oldList ++ [(c', tp, v)]
-                         _ -> error "enum has field besides EnumConstantDecl"
+                           return $ oldList ++ [Right (c', tp, v)]
+                         Cursor_FirstAttr -> return $ oldList ++ [Left c']
+                         k -> error $ "enum got bad type:\n" ++ show cursor' ++ "\n"
+                              ++ show c' ++ "\n" ++ show k
   cl <- myVisitChildren cursor makeE []
   return $ EnumDecl tp cl
 
-data CG_Elem = CG_Class Class
-             | CG_TypedefDecl TypedefDecl
-             | CG_StructDecl StructDecl
-             | CG_EnumDecl EnumDecl
-             | CG_Constructor Constructor
-
-data Namespace = Namespace Cursor' [TopLevelElem]
+data Namespace = Namespace Cursor' [TopLevelElem] [UnhandledTopLevel]
 
 data TopLevelElem = TopLevel_FunctionDecl Cursor'
                   | TopLevel_TypedefDecl Cursor'
                   | TopLevel_UnexposedDecl Cursor'
-                  | TopLevel_EnumDecl Cursor'
-                  | TopLevel_StructDecl Cursor'
+                  | TopLevel_EnumDecl EnumDecl
+                  | TopLevel_StructDecl ClassDecl
                   | TopLevel_Namespace Namespace
                   | TopLevel_UnionDecl Cursor'
                   | TopLevel_ClassTemplate Cursor'
                   | TopLevel_FirstAttr Cursor'
                   | TopLevel_ClassTemplatePartialSpecialization Cursor'
                   | TopLevel_FunctionTemplate Cursor'
-                  | TopLevel_ClassDecl Cursor'
+                  | TopLevel_ClassDecl ClassDecl
                   | TopLevel_VarDecl Cursor'
-                  | TopLevel_CXXMethod Cursor'
+                  | TopLevel_CXXMethod Method
                   | TopLevel_Constructor Cursor'
                   | TopLevel_Destructor Cursor'
---                  | TopLevel_FieldDecl Cursor'
                   | TopLevel_ConversionFunction Cursor'
---                  | TopLevel_CXXBaseSpecifier Cursor'
                   | TopLevel_UsingDeclaration Cursor'
                   | TopLevel_UsingDirective Cursor'
+--                  | TopLevel_FieldDecl Cursor'
+--                  | TopLevel_CXXBaseSpecifier Cursor'
 
-parseNamespace :: Cursor' -> ClangApp s ([UnhandledTopLevel], Namespace)
+parseNamespace :: Cursor' -> ClangApp s Namespace
 parseNamespace c = do
   (uh, tles) <- makeTopLevelElems c
-  return $ (uh, Namespace c tles)
+  return $ Namespace c tles uh
 
-topLevelConstructor :: Cursor' -> Maybe (ClangApp s ([UnhandledTopLevel], TopLevelElem))
-topLevelConstructor c = let simple x = Just $ return $ ([], x c) in
+topLevelConstructor :: Cursor' -> Maybe (ClangApp s TopLevelElem)
+topLevelConstructor c = let simple x = Just $ return (x c) in
   case cKind c of
-    Cursor_EnumDecl      -> simple TopLevel_EnumDecl
+    Cursor_EnumDecl      -> Just $ fmap TopLevel_EnumDecl (makeEnumDecl c)
     Cursor_TypedefDecl   -> simple TopLevel_TypedefDecl
     Cursor_UnexposedDecl -> simple TopLevel_UnexposedDecl
-    Cursor_StructDecl    -> simple TopLevel_StructDecl
-    Cursor_Namespace     -> Just $ do
-      (uh, n) <- parseNamespace c
-      return (uh, TopLevel_Namespace n)
+    Cursor_ClassDecl     -> Just $ fmap TopLevel_ClassDecl (parseClass c)
+    Cursor_StructDecl    -> Just $ fmap TopLevel_StructDecl (parseStruct c)
+    Cursor_Namespace     -> Just $ fmap TopLevel_Namespace (parseNamespace c)
     Cursor_FunctionDecl  -> simple TopLevel_FunctionDecl
     Cursor_UnionDecl     -> simple TopLevel_UnionDecl
     Cursor_ClassTemplate -> simple TopLevel_ClassTemplate
@@ -312,15 +323,11 @@ topLevelConstructor c = let simple x = Just $ return $ ([], x c) in
     Cursor_ClassTemplatePartialSpecialization ->
       simple TopLevel_ClassTemplatePartialSpecialization
     Cursor_FunctionTemplate -> simple TopLevel_FunctionTemplate
-    Cursor_ClassDecl     -> simple TopLevel_ClassDecl
     Cursor_VarDecl       -> simple TopLevel_VarDecl
-    Cursor_CXXMethod     -> simple TopLevel_CXXMethod
+    Cursor_CXXMethod     -> Just $ fmap TopLevel_CXXMethod (parseMethod c)
     Cursor_Constructor   -> simple TopLevel_Constructor
     Cursor_Destructor    -> simple TopLevel_Destructor
---              Cursor_FieldDecl          -> Right . TopLevel_FieldDecl
     Cursor_ConversionFunction -> simple TopLevel_ConversionFunction
---              Cursor_FunctionTemplate   -> Right . TopLevel_FunctionTemplate
---              Cursor_CXXBaseSpecifier   -> Right . TopLevel_CXXBaseSpecifier
     Cursor_UsingDeclaration -> simple TopLevel_UsingDeclaration
     Cursor_UsingDirective -> simple TopLevel_UsingDirective
     _ -> Nothing
@@ -331,12 +338,11 @@ makeTopLevelElems :: Cursor' -> ClangApp s ([UnhandledTopLevel], [TopLevelElem])
 makeTopLevelElems cursor' = do
   let parseTopLevelElems c (oldUnhandled, oldElems) = do
         c' <- mkCursor c
-        let k = cKind c'
         case topLevelConstructor c' of
-          Nothing -> return (oldUnhandled ++ [UnhandledTopLevel (show k, [c'])], oldElems)
+          Nothing -> return (oldUnhandled ++ [UnhandledTopLevel (show (cKind c'), [c'])], oldElems)
           Just doSomething -> do
-            (moarUnhandled,ret) <- doSomething
-            return (oldUnhandled ++ moarUnhandled, oldElems ++ [ret])
+            ret <- doSomething
+            return (oldUnhandled, oldElems ++ [ret])
 
   myVisitChildren (cCursor cursor') parseTopLevelElems ([],[])
 
@@ -410,26 +416,27 @@ parseTopLevel tu = do
   c' <- mkCursor c
   makeTopLevelElems c'
 
-mkUtlMap :: [UnhandledTopLevel] -> Map String [Cursor']
-mkUtlMap utl = M.fromListWith (flip (++)) $ map fromUtl utl
-
 main :: IO ()
 main = do
---  let filepath = "/usr/include/OGRE/OgreBillboardChain.h"
-  let filepath = "/usr/include/OGRE/Ogre.h"
+  let filepath = "/usr/include/OGRE/OgreBillboardChain.h"
+--  let filepath = "/usr/include/OGRE/Ogre.h"
 --  let filepath = "/usr/include/OGRE/OgreAnimationState.h"
       --args = ["-x","c++"]
       args = ["-x","c++","-I/usr/local/llvm/lib/clang/3.4/include"] -- ++ ["-D__STDC_CONSTANT_MACROS", "-D__STDC_LIMIT_MACROS","-c"]
       --args = ["-x","c++","-I/usr/lib/gcc/x86_64-linux-gnu/4.7/include","-I/usr/lib/gcc/x86_64-linux-gnu/4.7/include-fixed"]
-  (unhandledTl,_) <- withCreateIndex False False $ \index ->
+  _ <- parseHeader filepath args
+  return ()
+
+parseHeader :: String -> [String] -> IO ([UnhandledTopLevel], [TopLevelElem])
+parseHeader filepath args = do
+  withCreateIndex False False $ \index ->
     withParse index (Just filepath) args [] [TranslationUnit_None] parseTopLevel (error "No TXUnit!")
 
-  unless (null unhandledTl) $ do
-    let utlMap = mkUtlMap unhandledTl
-    liftIO $ putStrLn "\n--------------- topLevel got unhandled elements: ---------------"
-    liftIO $ mapM_ print $ M.toList utlMap
-    liftIO $ putStrLn "\n------------- keys: ------------"
-    liftIO $ mapM_ putStrLn $ M.keys utlMap
-    liftIO $ putStrLn "\n--------------------------------"
-    error "topLevel got unhandled elements"
-  return ()
+--  unless (null unhandledTl) $ do
+--    let utlMap = mkUtlMap unhandledTl
+--    liftIO $ putStrLn "\n--------------- topLevel got unhandled elements: ---------------"
+--    liftIO $ mapM_ print $ M.toList utlMap
+--    liftIO $ putStrLn "\n------------- keys: ------------"
+--    liftIO $ mapM_ putStrLn $ M.keys utlMap
+--    liftIO $ putStrLn "\n--------------------------------"
+--    error "topLevel got unhandled elements"
