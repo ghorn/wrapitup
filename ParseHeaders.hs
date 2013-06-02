@@ -3,6 +3,7 @@
 module ParseHeaders ( parseHeaders
                     , parseTopLevel
                     , mkCursor
+                    , getContext
                     , Cursor'(..)
                     , TopLevelElem(..)
                     , ClassDecl(..)
