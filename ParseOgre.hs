@@ -6,6 +6,8 @@ module ParseOgre ( main
                  , Binding(..)
                  , writeHaskell'
                  , writeBinding'
+                 , writeAll
+                 , writeOneNamespace
                  ) where
 
 --import Control.Monad ( unless )
@@ -56,8 +58,8 @@ callWriteCode :: TranslationUnit -> ClangApp s CGWriterOut
 callWriteCode tu = do
   (uh, tl) <- parseTopLevel tu
   unless (null uh) $ error "top level unhandled dammit"
-  execStateT (writeAll tl) cgEmpty
---  execStateT (writeOneNamespace "Ogre" tl) cgEmpty
+--  execStateT (writeAll tl) cgEmpty
+  execStateT (writeOneNamespace "Ogre" tl) cgEmpty
 
 myParseHeaders :: String -> [String] -> IO CGWriterOut
 myParseHeaders filepath args = do
@@ -362,11 +364,11 @@ writeClassDestructor cursor' = do
 
 
 
-writeClassVarDecl :: (MonadIO (t (ClangApp s)), MonadTrans t,
-                      MonadState CGWriterOut (t (ClangApp s))) =>
-                     Cursor' -> t (ClangApp s) ()
-writeClassVarDecl cursor' = do
-  -- this is assumed to always be static
+writeVarDecl :: (MonadIO (t (ClangApp s)), MonadTrans t,
+                 MonadState CGWriterOut (t (ClangApp s))) =>
+                 String -> Cursor' -> t (ClangApp s) ()
+writeVarDecl comment cursor' = do
+  -- this is either a static class variable, or a toplevel variable
   let cursor = cCursor cursor'
   cursorType <- lift $ C.getType cursor
 
@@ -391,19 +393,21 @@ writeClassVarDecl cursor' = do
              ]
       cRefSrc = init $ unlines $
                 [ "extern \"C\" " ++ retTypeSp ++ " * " ++ refCname ++ "(void);"
-                , retTypeSp ++ " " ++ refCname ++ "(void) {"
+                , retTypeSp ++ " * " ++ refCname ++ "(void) {"
                 , "    return &(" ++ cppname ++ ");"
                 , "}"
                 ]
   let hsSrc = HsForeignImport (SrcLoc "<unknown>" 1 1) "ccall" HsUnsafe cname (HsIdent ("c_"++cname)) (HsTyApp (HsTyCon (UnQual (HsIdent "IO"))) (HsTyCon (UnQual (HsIdent "BadType"))))
       hsRefSrc = HsForeignImport (SrcLoc "<unknown>" 1 1) "ccall" HsUnsafe refCname (HsIdent ("c_ref_"++cname)) (HsTyApp (HsTyCon (UnQual (HsIdent "IO"))) (HsTyCon (UnQual (HsIdent "BadName"))))
       loc = cSpellingLoc cursor'
-  writeBinding cSrc (Just $ strip $ prettyPrint hsSrc) loc "class VarDecl"
-  writeBinding cRefSrc (Just $ strip $ prettyPrint hsRefSrc) loc "class VarDecl (reference)"
+  writeBinding cSrc (Just $ strip $ prettyPrint hsSrc) loc comment
+  writeBinding cRefSrc (Just $ strip $ prettyPrint hsRefSrc) loc (comment ++ " (reference)")
+
+
 
 writeClassElem :: ClassElem -> CGWriter s ()
 writeClassElem (Class_Method x) = writeClassMethod x
-writeClassElem (Class_VarDecl c) = writeClassVarDecl c
+writeClassElem (Class_VarDecl c) = writeVarDecl "class VarDecl" c
 writeClassElem (Class_Constructor c) = writeClassConstructor c
 writeClassElem (Class_Destructor c) = writeClassDestructor c
 writeClassElem (Class_FieldDecl c) = writeFieldDecl c
@@ -436,12 +440,12 @@ writeTle (TopLevel_StructDecl c) = writeClassDecl c
 writeTle (TopLevel_EnumDecl ed) = writeEnumDecl ed
 writeTle (TopLevel_Constructor c) = writeClassConstructor c
 writeTle (TopLevel_Namespace c) = writeNamespace c
+writeTle (TopLevel_VarDecl c) = writeVarDecl "top level VarDecl" c
 writeTle (TopLevel_UnexposedDecl c)      = unhandledTle Cursor_UnexposedDecl c
 writeTle (TopLevel_FirstAttr c)          = unhandledTle Cursor_FirstAttr c
 writeTle (TopLevel_Destructor c)         = unhandledTle Cursor_Destructor c
 writeTle (TopLevel_UnionDecl c)          = unhandledTle Cursor_UnionDecl c
 writeTle (TopLevel_UsingDeclaration c)   = unhandledTle Cursor_UsingDeclaration c
-writeTle (TopLevel_VarDecl c)            = unhandledTle Cursor_VarDecl c
 writeTle (TopLevel_FunctionDecl c)       = unhandledTle Cursor_FunctionDecl c
 writeTle (TopLevel_ConversionFunction c) = unhandledTle Cursor_ConversionFunction c
 writeTle (TopLevel_UsingDirective c)     = unhandledTle Cursor_UsingDirective c
