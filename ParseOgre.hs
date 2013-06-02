@@ -4,7 +4,6 @@
 module ParseOgre ( main
                  , CGWriterOut(..)
                  , Binding(..)
-                 , writeHaskell'
                  , writeBinding'
                  , writeAll
                  , writeOneNamespace
@@ -69,17 +68,22 @@ myParseHeaders filepath args =
 -------------------------------------------------------------------
 data CGWriterOut = CGWriterOut { cgUnhandledCe :: Map String [Cursor']
                                , cgUnhandledTle :: Map String [Cursor']
-                               , cgHaskell :: [(Loc,String)]
                                , cgBinding :: [Binding]
                                }
 cgEmpty :: CGWriterOut
-cgEmpty = CGWriterOut M.empty M.empty [] []
+cgEmpty = CGWriterOut M.empty M.empty []
 
 reverseCg :: CGWriterOut -> CGWriterOut
-reverseCg (CGWriterOut a b c d) =
-  CGWriterOut (M.map reverse a) (M.map reverse b) (reverse c) (reverse d)
+reverseCg (CGWriterOut a b c) =
+  CGWriterOut (M.map reverse a) (M.map reverse b) (reverse c)
 
-data Binding = Binding { bCWrapper :: String
+
+--toFiles :: CGWriterOut -> Map FilePath (Map Loc (String,String))
+--toFiles (CGWriterOut {cgHaskell = hs, cgBinding = bds}) = undefined
+--  where
+--    bds
+
+data Binding = Binding { bCWrapper :: Maybe String
                        , bHSWrapper :: Maybe String
                        , bLoc :: Loc
                        , bDesc :: String
@@ -93,7 +97,8 @@ showBinding (Binding csrc' hssrc' loc desc) =
   , hssrc
   , "-------------------------------------------------------"
   ]
-  where csrc = "// " ++ desc ++ "\n// " ++ show loc ++ "\n" ++ csrc'
+  where csrc = "// " ++ desc ++ "\n// " ++ show loc ++ "\n" ++
+               fromMaybe "// unimplemented :(" csrc'
         hssrc = init $ unlines
                 [ "-- | "
                 , init $ unlines $ map ("-- >  " ++ ) $ lines csrc
@@ -113,23 +118,13 @@ unhandledTle ck c = do
   cg <- get
   put $ cg {cgUnhandledTle = M.insertWith (flip (++)) (show ck) [c] (cgUnhandledTle cg)}
 
-writeHaskell :: MonadState CGWriterOut m => Loc -> String -> m ()
-writeHaskell loc x = do
-  cg <- get
-  put $ cg {cgHaskell = (loc,x):cgHaskell cg}
-
-writeHaskell' :: (MonadIO m, MonadState CGWriterOut m) => Loc -> String -> m ()
-writeHaskell' loc x = do
-  liftIO $ print loc
-  liftIO $ putStrLn x
-  writeHaskell loc x
-
-writeBinding :: MonadState CGWriterOut m => String -> Maybe String -> Loc -> String -> m ()
+writeBinding :: MonadState CGWriterOut m => Maybe String -> Maybe String -> Loc -> String -> m ()
 writeBinding x y loc desc = do
   cg <- get
   put $ cg {cgBinding = Binding x y loc desc:cgBinding cg}
 
-writeBinding' :: (MonadIO m, MonadState CGWriterOut m) => String -> Maybe String -> Loc -> String -> m ()
+writeBinding' :: (MonadIO m, MonadState CGWriterOut m) =>
+                 Maybe String -> Maybe String -> Loc -> String -> m ()
 writeBinding' x y loc desc = do
   liftIO $ putStrLn $ showBinding (Binding x y loc desc)
   writeBinding x y loc desc
@@ -164,14 +159,13 @@ makeEnumInstance name elems =
     err = HsMatch src0 (HsIdent "toEnum") [HsPVar (HsIdent "k")] (HsUnGuardedRhs (HsInfixApp (HsInfixApp (HsInfixApp (HsVar (UnQual (HsIdent "error"))) (HsQVarOp (UnQual (HsSymbol "$"))) (HsLit (HsString "toEnum got unhandled number "))) (HsQVarOp (UnQual (HsSymbol "++"))) (HsApp (HsVar (UnQual (HsIdent "show"))) (HsVar (UnQual (HsIdent "k"))))) (HsQVarOp (UnQual (HsSymbol "++"))) (HsLit (HsString ("for type "++name))))) []
 
 writeEnumDecl :: (MonadIO m, MonadState CGWriterOut m) => EnumDecl -> m ()
-writeEnumDecl ed@(EnumDecl name loc _ _) =
-  writeHaskell loc $ init $ unlines
-    [ "-- EnumDecl: " ++ name ++ " " ++ show loc
-    , hsEnum
-    , hsEnumInstance
-    , ""
-    ]
+writeEnumDecl ed@(EnumDecl name loc _ _) = writeBinding Nothing hssrc loc "EnumDecl"
   where
+    hssrc = Just $ init $ unlines [ "-- EnumDecl: " ++ name ++ " " ++ show loc
+                                  , hsEnum
+                                  , hsEnumInstance
+                                  , ""
+                                  ]
     elems = toNiceEnum ed
     hsEnum = makeEnumDecl name (map fst elems)
     hsEnumInstance = makeEnumInstance name elems
@@ -210,7 +204,7 @@ writeNonStaticClassMethod virtual retTypeSp' context name loc ats' = do
             , "    " ++ "return x0->" ++ name ++ "(" ++ callThese ++ ");"
             , "}"
             ]
-  writeBinding ret Nothing loc (virt ++ "non-static class method")
+  writeBinding (Just ret) Nothing loc (virt ++ "non-static class method")
 
 writeStaticClassMethod
   :: (MonadIO m, MonadState CGWriterOut m) =>
@@ -226,7 +220,7 @@ writeStaticClassMethod virtual retTypeSp' context name loc ats = do
             , "    " ++ "return " ++ cppContext context ++ name ++ "(" ++ argsWithNames ++ ");"
             , "}"
             ]
-  writeBinding ret Nothing loc (virt ++ "static class method")
+  writeBinding (Just ret) Nothing loc (virt ++ "static class method")
 
 -- this is assumed to never be static, VarDecl is the static ones
 writeFieldDecl'
@@ -248,8 +242,8 @@ writeFieldDecl' retTypeSp' context name loc = do
             , "    " ++ "return &(x0->" ++ name ++ ");"
             , "}"
             ]
-  writeBinding cSrc Nothing loc "FieldDecl"
-  writeBinding cRefSrc Nothing loc "FieldDecl (reference)"
+  writeBinding (Just cSrc) Nothing loc "FieldDecl"
+  writeBinding (Just cRefSrc) Nothing loc "FieldDecl (reference)"
 
 writeFieldDecl
   :: (MonadIO (t (ClangApp s)), MonadTrans t,
@@ -328,7 +322,7 @@ writeClassConstructor cursor' = do
              , "}"
              ]
       hssrc = Nothing
-  writeBinding csrc hssrc loc "constructor"
+  writeBinding (Just csrc) hssrc loc "constructor"
 
 writeClassDestructor :: (MonadIO (t (ClangApp s)), MonadTrans t,
                           MonadState CGWriterOut (t (ClangApp s))) =>
@@ -363,7 +357,7 @@ writeClassDestructor cursor' = do
              ]
       hssrc = strip $ prettyPrint $
               HsForeignImport (SrcLoc "<unknown>" 1 1) "ccall" HsUnsafe cname (HsIdent ("c_"++cname)) (HsTyFun (HsTyCon (UnQual (HsIdent "BadType"))) (HsTyApp (HsTyCon (UnQual (HsIdent "IO"))) (HsTyCon (Special HsUnitCon))))
-  writeBinding csrc (Just hssrc) loc ("class " ++ vd ++ "destructor")
+  writeBinding (Just csrc) (Just hssrc) loc ("class " ++ vd ++ "destructor")
 
 
 
@@ -403,8 +397,8 @@ writeVarDecl comment cursor' = do
   let hsSrc = HsForeignImport (SrcLoc "<unknown>" 1 1) "ccall" HsUnsafe cname (HsIdent ("c_"++cname)) (HsTyApp (HsTyCon (UnQual (HsIdent "IO"))) (HsTyCon (UnQual (HsIdent "BadType"))))
       hsRefSrc = HsForeignImport (SrcLoc "<unknown>" 1 1) "ccall" HsUnsafe refCname (HsIdent ("c_ref_"++cname)) (HsTyApp (HsTyCon (UnQual (HsIdent "IO"))) (HsTyCon (UnQual (HsIdent "BadName"))))
       loc = cLoc cursor'
-  writeBinding cSrc (Just $ strip $ prettyPrint hsSrc) loc comment
-  writeBinding cRefSrc (Just $ strip $ prettyPrint hsRefSrc) loc (comment ++ " (reference)")
+  writeBinding (Just cSrc) (Just $ strip $ prettyPrint hsSrc) loc comment
+  writeBinding (Just cRefSrc) (Just $ strip $ prettyPrint hsRefSrc) loc (comment ++ " (reference)")
 
 --writeConversionFunction comment cursor' = do
 --  let cursor = cCursor cursor'
