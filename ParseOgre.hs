@@ -56,7 +56,8 @@ callWriteCode :: TranslationUnit -> ClangApp s CGWriterOut
 callWriteCode tu = do
   (uh, tl) <- parseTopLevel tu
   unless (null uh) $ error "top level unhandled dammit"
-  execStateT (writeCode tl) cgEmpty
+  execStateT (writeAll tl) cgEmpty
+--  execStateT (writeOneNamespace "Ogre" tl) cgEmpty
 
 myParseHeaders :: String -> [String] -> IO CGWriterOut
 myParseHeaders filepath args = do
@@ -453,13 +454,16 @@ writeNamespace (Namespace c _ xs) =
   "\ngot unhandled top level elements: " ++ show (map fromUtl xs)
 
 
-writeCode :: [TopLevelElem] -> CGWriter s ()
-writeCode tls = do
+writeOneNamespace :: String -> [TopLevelElem] -> CGWriter s ()
+writeOneNamespace namespace tls = do
   -- filter out everything but Ogre
   let f (TopLevel_Namespace ns@(Namespace c _ _))
-        | cDisplayName c == "Ogre" = Just ns
+        | cDisplayName c == namespace = Just ns
         | otherwise = Nothing
       f _ = Nothing
-      ogreNamespaces = mapMaybe f tls
+      namespaces = mapMaybe f tls
 
-  mapM_ writeNamespace ogreNamespaces
+  mapM_ writeNamespace namespaces
+
+writeAll :: [TopLevelElem] -> CGWriter s ()
+writeAll = mapM_ writeTle
