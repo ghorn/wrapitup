@@ -62,7 +62,7 @@ callWriteCode tu = do
   execStateT (writeOneNamespace "Ogre" tl) cgEmpty
 
 myParseHeaders :: String -> [String] -> IO CGWriterOut
-myParseHeaders filepath args = do
+myParseHeaders filepath args =
   withCreateIndex False False $ \index ->
     withParse index (Just filepath) args [] [TranslationUnit_None] (fmap reverseCg . callWriteCode) (error "No TXUnit!")
 
@@ -86,7 +86,7 @@ data Binding = Binding { bCWrapper :: String
                        }
 showBinding :: Binding -> String
 showBinding (Binding csrc' hssrc' loc desc) =
-  init $ unlines $
+  init $ unlines
   [ "------------------ " ++ loc ++ " ----------------------"
   , csrc
   , "-------------------------------------------------------"
@@ -94,7 +94,7 @@ showBinding (Binding csrc' hssrc' loc desc) =
   , "-------------------------------------------------------"
   ]
   where csrc = "// " ++ desc ++ "\n// " ++ loc ++ "\n" ++ csrc'
-        hssrc = init $ unlines $
+        hssrc = init $ unlines
                 [ "-- | "
                 , init $ unlines $ map ("-- >  " ++ ) $ lines csrc
                 , fromMaybe "-- unimplemented :(" hssrc'
@@ -147,7 +147,7 @@ src0 = SrcLoc {srcFilename = "<unknown>", srcLine = 1, srcColumn = 1}
 makeEnumDecl :: String -> [String] -> String
 makeEnumDecl name fields =
   strip $ prettyPrint $
-  HsDataDecl src0 [] (HsIdent name) [] (map (\f -> HsConDecl src0 (HsIdent f) []) fields) $
+  HsDataDecl src0 [] (HsIdent name) [] (map (\f -> HsConDecl src0 (HsIdent f) []) fields)
   [UnQual (HsIdent "Show"),UnQual (HsIdent "Eq")]
 
 makeEnumInstance :: String -> [(String, Integer)] -> String
@@ -202,7 +202,7 @@ writeNonStaticClassMethod virtual retTypeSp' context name loc ats' = do
       callThese = intercalate ", " (drop 1 $ argNames (1 + length ats'))
       proto args' = retTypeSp' ++ " " ++ cContext context ++ name ++ "(" ++ args' ++ ")"
       virt = if virtual then "virtual " else ""
-      ret = init $ unlines $
+      ret = init $ unlines
             [ "extern \"C\" " ++ proto argsWithNames ++ ";"
             , proto argsWithNames ++ " {"
             , "    " ++ "return x0->" ++ name ++ "(" ++ callThese ++ ");"
@@ -218,7 +218,7 @@ writeStaticClassMethod virtual retTypeSp' context name loc ats = do
       argsWithNames = insertCommasAndNames ats
       proto args' = retTypeSp' ++ " " ++ cContext context ++ name ++ "(" ++ args' ++ ")"
       virt = if virtual then "virtual " else ""
-      ret = init $ unlines $
+      ret = init $ unlines
             [ "extern \"C\" " ++ proto args ++ ";"
             , proto argsWithNames ++ " {"
             , "    " ++ "return " ++ cppContext context ++ name ++ "(" ++ argsWithNames ++ ");"
@@ -229,18 +229,18 @@ writeStaticClassMethod virtual retTypeSp' context name loc ats = do
 -- this is assumed to never be static, VarDecl is the static ones
 writeFieldDecl'
   :: (MonadIO m, MonadState CGWriterOut m) =>
-     [Char] -> [String] -> [Char] -> String -> m ()
+     String -> [String] -> String -> String -> m ()
 writeFieldDecl' retTypeSp' context name loc = do
   let cppType = cppContextNoTrailing context ++ " *"
       proto = retTypeSp' ++ " " ++ cContext context ++ name ++ "(" ++ cppType ++ " x0)"
-      cSrc = init $ unlines $
+      cSrc = init $ unlines
             [ "extern \"C\" " ++ proto ++ ";"
             , proto ++ " {"
             , "    " ++ "return x0->" ++ name ++ ";"
             , "}"
             ]
       proto' = retTypeSp' ++ " * " ++ cContext context ++ name ++ "(" ++ cppType ++ " x0)"
-      cRefSrc = init $ unlines $
+      cRefSrc = init $ unlines
             [ "extern \"C\" " ++ proto' ++ ";"
             , proto' ++ " {"
             , "    " ++ "return &(x0->" ++ name ++ ");"
@@ -283,10 +283,11 @@ cContext =  concatMap (++ "_")
 
 
 writeClassMethod :: (MonadIO m, MonadState CGWriterOut m) => Method -> m ()
-writeClassMethod m = do
-  if (mStatic m)
-    then writeStaticClassMethod (mVirtual m) (mRetType m) (mContext m) (mName m) (mLoc m) (mArgTypes m)
-    else writeNonStaticClassMethod (mVirtual m) (mRetType m) (mContext m) (mName m) (mLoc m) (mArgTypes m)
+writeClassMethod m
+  | mStatic m = writeStaticClassMethod
+                (mVirtual m) (mRetType m) (mContext m) (mName m) (mLoc m) (mArgTypes m)
+  | otherwise = writeNonStaticClassMethod
+                (mVirtual m) (mRetType m) (mContext m) (mName m) (mLoc m) (mArgTypes m)
 
 writeClassConstructor :: (MonadIO (t (ClangApp s)), MonadTrans t,
                           MonadState CGWriterOut (t (ClangApp s))) =>
@@ -318,7 +319,7 @@ writeClassConstructor cursor' = do
       argsWithNames = insertCommasAndNames ats
       cname = cContext context ++ "new"
       proto args' = retType ++ " " ++ cname ++ "(" ++ args' ++ ")"
-      csrc = init $ unlines $
+      csrc = init $ unlines
              [ "extern \"C\" " ++ proto args ++ ";"
              , proto argsWithNames ++ " {"
              , "    " ++ "return new " ++ contextName ++ "(" ++ argsWithNames ++ ");"
@@ -352,7 +353,7 @@ writeClassDestructor cursor' = do
       loc = cSpellingLoc cursor'
       cname = cContext context ++ "delete"
       proto = "void " ++ cname ++ "(" ++ argType ++ " x0)"
-      csrc = init $ unlines $
+      csrc = init $ unlines
              [ "extern \"C\" " ++ proto ++ ";"
              , proto ++ " {"
              , "    " ++ "delete x0;"
@@ -385,13 +386,13 @@ writeVarDecl comment cursor' = do
   let cppname = cppContext context ++ name
       cname   = cContext   context ++ name
       refCname = "ref__" ++ cname
-      cSrc = init $ unlines $
+      cSrc = init $ unlines
              [ "extern \"C\" " ++ retTypeSp ++ " " ++ cname ++ "(void);"
              , retTypeSp ++ " " ++ cname ++ "(void) {"
              , "    return " ++ cppname ++ ";"
              , "}"
              ]
-      cRefSrc = init $ unlines $
+      cRefSrc = init $ unlines
                 [ "extern \"C\" " ++ retTypeSp ++ " * " ++ refCname ++ "(void);"
                 , retTypeSp ++ " * " ++ refCname ++ "(void) {"
                 , "    return &(" ++ cppname ++ ");"
@@ -403,56 +404,75 @@ writeVarDecl comment cursor' = do
   writeBinding cSrc (Just $ strip $ prettyPrint hsSrc) loc comment
   writeBinding cRefSrc (Just $ strip $ prettyPrint hsRefSrc) loc (comment ++ " (reference)")
 
-
+--writeConversionFunction comment cursor' = do
+--  let cursor = cCursor cursor'
+--  cursorType <- lift $ C.getType cursor
+--
+--  context <- lift $ getContext cursor
+--
+--  retTypeSp <- lift $ CT.getTypeSpelling cursorType >>= C.unpack
+--
+----  cq <- lift $ CT.isConstQualifiedType    cursorType
+----  vq <- lift $ CT.isVolatileQualifiedType cursorType
+----  rq <- lift $ CT.isRestrictQualifiedType cursorType
+----  liftIO $ print (cq,vq,rq)
+--
+--  name <- lift $ C.getSpelling cursor >>= C.unpack
+--  liftIO $ print cursor'
+--  liftIO $ print (comment, cDisplayName cursor', context, retTypeSp, name)
+--  undefined
+  
 
 writeClassElem :: ClassElem -> CGWriter s ()
-writeClassElem (Class_Method x) = writeClassMethod x
-writeClassElem (Class_VarDecl c) = writeVarDecl "class VarDecl" c
-writeClassElem (Class_Constructor c) = writeClassConstructor c
-writeClassElem (Class_Destructor c) = writeClassDestructor c
-writeClassElem (Class_FieldDecl c) = writeFieldDecl c
-writeClassElem (Class_ClassDecl c) = writeClassDecl c
-writeClassElem (Class_StructDecl c) = writeClassDecl c
-writeClassElem (Class_EnumDecl x) = writeEnumDecl x
-writeClassElem (Class_FunctionTemplate c)   = unhandledCe Cursor_FunctionTemplate c
-writeClassElem (Class_CXXBaseSpecifier c)   = unhandledCe Cursor_CXXBaseSpecifier c
-writeClassElem (Class_CXXBoolLiteralExpr c) = unhandledCe Cursor_CXXBoolLiteralExpr c
-writeClassElem (Class_UsingDeclaration c)   = unhandledCe Cursor_UsingDeclaration c
-writeClassElem (Class_TypedefDecl c)        = unhandledCe Cursor_TypedefDecl c
-writeClassElem (Class_UnexposedDecl c)      = unhandledCe Cursor_UnexposedDecl c
-writeClassElem (Class_ConversionFunction c) = unhandledCe Cursor_ConversionFunction c
-writeClassElem (Class_UnionDecl c)          = unhandledCe Cursor_UnionDecl c
-writeClassElem (Class_TypeRef c)            = unhandledCe Cursor_TypeRef c
-writeClassElem (Class_ClassTemplate c)      = unhandledCe Cursor_ClassTemplate c
-writeClassElem (Class_FirstAttr c)          = unhandledCe Cursor_FirstAttr c
-writeClassElem (Class_IntegerLiteral c)     = unhandledCe Cursor_IntegerLiteral c
-writeClassElem (Class_TemplateRef c)        = unhandledCe Cursor_TemplateRef c
-writeClassElem (Class_NamespaceRef c)       = unhandledCe Cursor_NamespaceRef c
-writeClassElem (Class_UnaryOperator c)      = unhandledCe Cursor_UnaryOperator c
+writeClassElem (CeMethod x) = writeClassMethod x
+writeClassElem (CeVarDecl c) = writeVarDecl "class VarDecl" c
+writeClassElem (CeConstructor c) = writeClassConstructor c
+writeClassElem (CeDestructor c) = writeClassDestructor c
+writeClassElem (CeFieldDecl c) = writeFieldDecl c
+writeClassElem (CeClassDecl c) = writeClassDecl c
+writeClassElem (CeStructDecl c) = writeClassDecl c
+writeClassElem (CeEnumDecl x) = writeEnumDecl x
+writeClassElem (CeConversionFunction c) = unhandledCe Cursor_ConversionFunction c
+                                          --writeConversionFunction "class" c
+writeClassElem (CeFunctionTemplate c)   = unhandledCe Cursor_FunctionTemplate c
+writeClassElem (CeCXXBaseSpecifier c)   = unhandledCe Cursor_CXXBaseSpecifier c
+writeClassElem (CeCXXBoolLiteralExpr c) = unhandledCe Cursor_CXXBoolLiteralExpr c
+writeClassElem (CeUsingDeclaration c)   = unhandledCe Cursor_UsingDeclaration c
+writeClassElem (CeTypedefDecl c)        = unhandledCe Cursor_TypedefDecl c
+writeClassElem (CeUnexposedDecl c)      = unhandledCe Cursor_UnexposedDecl c
+writeClassElem (CeUnionDecl c)          = unhandledCe Cursor_UnionDecl c
+writeClassElem (CeTypeRef c)            = unhandledCe Cursor_TypeRef c
+writeClassElem (CeClassTemplate c)      = unhandledCe Cursor_ClassTemplate c
+writeClassElem (CeFirstAttr c)          = unhandledCe Cursor_FirstAttr c
+writeClassElem (CeIntegerLiteral c)     = unhandledCe Cursor_IntegerLiteral c
+writeClassElem (CeTemplateRef c)        = unhandledCe Cursor_TemplateRef c
+writeClassElem (CeNamespaceRef c)       = unhandledCe Cursor_NamespaceRef c
+writeClassElem (CeUnaryOperator c)      = unhandledCe Cursor_UnaryOperator c
 
 writeClassDecl :: ClassDecl -> StateT CGWriterOut (ClangApp s) ()
 writeClassDecl (ClassDecl _ elems) = mapM_ writeClassElem elems
 
 writeTle :: TopLevelElem -> CGWriter s ()
-writeTle (TopLevel_TypedefDecl {}) = return ()
-writeTle (TopLevel_ClassDecl c) = writeClassDecl c
-writeTle (TopLevel_StructDecl c) = writeClassDecl c
-writeTle (TopLevel_EnumDecl ed) = writeEnumDecl ed
-writeTle (TopLevel_Constructor c) = writeClassConstructor c
-writeTle (TopLevel_Namespace c) = writeNamespace c
-writeTle (TopLevel_VarDecl c) = writeVarDecl "top level VarDecl" c
-writeTle (TopLevel_UnexposedDecl c)      = unhandledTle Cursor_UnexposedDecl c
-writeTle (TopLevel_FirstAttr c)          = unhandledTle Cursor_FirstAttr c
-writeTle (TopLevel_Destructor c)         = unhandledTle Cursor_Destructor c
-writeTle (TopLevel_UnionDecl c)          = unhandledTle Cursor_UnionDecl c
-writeTle (TopLevel_UsingDeclaration c)   = unhandledTle Cursor_UsingDeclaration c
-writeTle (TopLevel_FunctionDecl c)       = unhandledTle Cursor_FunctionDecl c
-writeTle (TopLevel_ConversionFunction c) = unhandledTle Cursor_ConversionFunction c
-writeTle (TopLevel_UsingDirective c)     = unhandledTle Cursor_UsingDirective c
-writeTle (TopLevel_FunctionTemplate c)   = unhandledTle Cursor_FunctionTemplate c
-writeTle (TopLevel_ClassTemplate c)      = unhandledTle Cursor_ClassTemplate c
-writeTle (TopLevel_CXXMethod c)          = unhandledTle Cursor_CXXMethod c
-writeTle (TopLevel_ClassTemplatePartialSpecialization c) =
+writeTle (TlTypedefDecl {}) = return ()
+writeTle (TlClassDecl c) = writeClassDecl c
+writeTle (TlStructDecl c) = writeClassDecl c
+writeTle (TlEnumDecl ed) = writeEnumDecl ed
+writeTle (TlConstructor c) = writeClassConstructor c
+writeTle (TlNamespace c) = writeNamespace c
+writeTle (TlVarDecl c) = writeVarDecl "top level VarDecl" c
+writeTle (TlConversionFunction c) = unhandledTle Cursor_ConversionFunction c
+                                    --writeConversionFunction "top level" c
+writeTle (TlUnexposedDecl c)      = unhandledTle Cursor_UnexposedDecl c
+writeTle (TlFirstAttr c)          = unhandledTle Cursor_FirstAttr c
+writeTle (TlDestructor c)         = unhandledTle Cursor_Destructor c
+writeTle (TlUnionDecl c)          = unhandledTle Cursor_UnionDecl c
+writeTle (TlUsingDeclaration c)   = unhandledTle Cursor_UsingDeclaration c
+writeTle (TlFunctionDecl c)       = unhandledTle Cursor_FunctionDecl c
+writeTle (TlUsingDirective c)     = unhandledTle Cursor_UsingDirective c
+writeTle (TlFunctionTemplate c)   = unhandledTle Cursor_FunctionTemplate c
+writeTle (TlClassTemplate c)      = unhandledTle Cursor_ClassTemplate c
+writeTle (TlCXXMethod c)          = unhandledTle Cursor_CXXMethod c
+writeTle (TlClassTemplatePartialSpecialization c) =
   unhandledTle Cursor_ClassTemplatePartialSpecialization c
 
 writeNamespace :: Namespace -> CGWriter s ()
@@ -465,7 +485,7 @@ writeNamespace (Namespace c _ xs) =
 writeOneNamespace :: String -> [TopLevelElem] -> CGWriter s ()
 writeOneNamespace namespace tls = do
   -- filter out everything but Ogre
-  let f (TopLevel_Namespace ns@(Namespace c _ _))
+  let f (TlNamespace ns@(Namespace c _ _))
         | cDisplayName c == namespace = Just ns
         | otherwise = Nothing
       f _ = Nothing

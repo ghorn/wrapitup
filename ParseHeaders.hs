@@ -136,57 +136,57 @@ makeChildList cursor = do
         return $ oldList ++ [c']
   myVisitChildren cursor makeMap []
 
-data ClassElem = Class_Method Method
-               | Class_Constructor Cursor'
-               | Class_Destructor Cursor'
-               | Class_TypedefDecl Cursor'
-               | Class_VarDecl Cursor'
-               | Class_FieldDecl Cursor'
-               | Class_UnexposedDecl Cursor'
-               | Class_ConversionFunction Cursor'
-               | Class_EnumDecl EnumDecl
-               | Class_FunctionTemplate Cursor'
-               | Class_StructDecl ClassDecl
-               | Class_ClassDecl ClassDecl
-               | Class_CXXBaseSpecifier Cursor'
-               | Class_CXXBoolLiteralExpr Cursor'
-               | Class_UsingDeclaration Cursor'
-               | Class_TypeRef Cursor'
-               | Class_UnionDecl Cursor'
-               | Class_ClassTemplate Cursor'
-               | Class_FirstAttr Cursor'
-               | Class_IntegerLiteral Cursor'
-               | Class_TemplateRef Cursor'
-               | Class_NamespaceRef Cursor'
-               | Class_UnaryOperator Cursor'
+data ClassElem = CeMethod Method
+               | CeConstructor Cursor'
+               | CeDestructor Cursor'
+               | CeTypedefDecl Cursor'
+               | CeVarDecl Cursor'
+               | CeFieldDecl Cursor'
+               | CeUnexposedDecl Cursor'
+               | CeConversionFunction Cursor'
+               | CeEnumDecl EnumDecl
+               | CeFunctionTemplate Cursor'
+               | CeStructDecl ClassDecl
+               | CeClassDecl ClassDecl
+               | CeCXXBaseSpecifier Cursor'
+               | CeCXXBoolLiteralExpr Cursor'
+               | CeUsingDeclaration Cursor'
+               | CeTypeRef Cursor'
+               | CeUnionDecl Cursor'
+               | CeClassTemplate Cursor'
+               | CeFirstAttr Cursor'
+               | CeIntegerLiteral Cursor'
+               | CeTemplateRef Cursor'
+               | CeNamespaceRef Cursor'
+               | CeUnaryOperator Cursor'
                deriving Show
 
 classConstructor :: Cursor' -> Maybe (ClangApp s ClassElem)
 classConstructor c = let simple x = Just $ return $ x c in
   case cKind c of
-    Cursor_CXXMethod          -> Just $ fmap Class_Method (parseMethod c)
-    Cursor_Constructor        -> simple Class_Constructor
-    Cursor_Destructor         -> simple Class_Destructor
-    Cursor_TypedefDecl        -> simple Class_TypedefDecl
-    Cursor_VarDecl            -> simple Class_VarDecl
-    Cursor_FieldDecl          -> simple Class_FieldDecl
-    Cursor_UnexposedDecl      -> simple Class_UnexposedDecl
-    Cursor_ConversionFunction -> simple Class_ConversionFunction
-    Cursor_EnumDecl           -> Just $ fmap Class_EnumDecl (parseEnumDecl c)
-    Cursor_FunctionTemplate   -> simple Class_FunctionTemplate
-    Cursor_StructDecl         -> Just $ fmap Class_StructDecl (parseStruct c)
-    Cursor_ClassDecl          -> Just $ fmap Class_ClassDecl (parseClass c)
-    Cursor_CXXBaseSpecifier   -> simple Class_CXXBaseSpecifier
-    Cursor_UsingDeclaration   -> simple Class_UsingDeclaration
-    Cursor_CXXBoolLiteralExpr -> simple Class_CXXBoolLiteralExpr
-    Cursor_TypeRef            -> simple Class_TypeRef
-    Cursor_UnionDecl          -> simple Class_UnionDecl
-    Cursor_ClassTemplate      -> simple Class_ClassTemplate
-    Cursor_FirstAttr          -> simple Class_FirstAttr
-    Cursor_IntegerLiteral     -> simple Class_IntegerLiteral
-    Cursor_TemplateRef        -> simple Class_TemplateRef
-    Cursor_NamespaceRef       -> simple Class_NamespaceRef
-    Cursor_UnaryOperator      -> simple Class_UnaryOperator
+    Cursor_CXXMethod          -> Just $ fmap CeMethod (parseMethod c)
+    Cursor_Constructor        -> simple CeConstructor
+    Cursor_Destructor         -> simple CeDestructor
+    Cursor_TypedefDecl        -> simple CeTypedefDecl
+    Cursor_VarDecl            -> simple CeVarDecl
+    Cursor_FieldDecl          -> simple CeFieldDecl
+    Cursor_UnexposedDecl      -> simple CeUnexposedDecl
+    Cursor_ConversionFunction -> simple CeConversionFunction
+    Cursor_EnumDecl           -> Just $ fmap CeEnumDecl (parseEnumDecl c)
+    Cursor_FunctionTemplate   -> simple CeFunctionTemplate
+    Cursor_StructDecl         -> Just $ fmap CeStructDecl (parseStruct c)
+    Cursor_ClassDecl          -> Just $ fmap CeClassDecl (parseClass c)
+    Cursor_CXXBaseSpecifier   -> simple CeCXXBaseSpecifier
+    Cursor_UsingDeclaration   -> simple CeUsingDeclaration
+    Cursor_CXXBoolLiteralExpr -> simple CeCXXBoolLiteralExpr
+    Cursor_TypeRef            -> simple CeTypeRef
+    Cursor_UnionDecl          -> simple CeUnionDecl
+    Cursor_ClassTemplate      -> simple CeClassTemplate
+    Cursor_FirstAttr          -> simple CeFirstAttr
+    Cursor_IntegerLiteral     -> simple CeIntegerLiteral
+    Cursor_TemplateRef        -> simple CeTemplateRef
+    Cursor_NamespaceRef       -> simple CeNamespaceRef
+    Cursor_UnaryOperator      -> simple CeUnaryOperator
     _ -> Nothing
 
 makeClassOrStructElems :: CXXAccessSpecifier -> Cursor' -> ClangApp s [ClassElem]
@@ -293,14 +293,14 @@ parseMethod cursor' = do
 
   name <- C.getSpelling cursor >>= C.unpack
 
-  return $ Method { mName = name
-                  , mStatic = static
-                  , mVirtual = virtual
-                  , mRetType = retTypeSp
-                  , mArgTypes = argTypesSp
-                  , mLoc = cSpellingLoc cursor'
-                  , mContext = context
-                  }
+  return Method { mName = name
+                , mStatic = static
+                , mVirtual = virtual
+                , mRetType = retTypeSp
+                , mArgTypes = argTypesSp
+                , mLoc = cSpellingLoc cursor'
+                , mContext = context
+                }
 
 parseEnumDecl :: Cursor' -> ClangApp s EnumDecl
 parseEnumDecl cursor' = do
@@ -326,27 +326,27 @@ data Namespace = Namespace Cursor' [TopLevelElem] [UnhandledTopLevel]
 instance Show Namespace where
   show (Namespace c _ _) = "Namespace " ++ show c
 
-data TopLevelElem = TopLevel_FunctionDecl Cursor'
-                  | TopLevel_TypedefDecl Cursor'
-                  | TopLevel_UnexposedDecl Cursor'
-                  | TopLevel_EnumDecl EnumDecl
-                  | TopLevel_StructDecl ClassDecl
-                  | TopLevel_Namespace Namespace
-                  | TopLevel_UnionDecl Cursor'
-                  | TopLevel_ClassTemplate Cursor'
-                  | TopLevel_FirstAttr Cursor'
-                  | TopLevel_ClassTemplatePartialSpecialization Cursor'
-                  | TopLevel_FunctionTemplate Cursor'
-                  | TopLevel_ClassDecl ClassDecl
-                  | TopLevel_VarDecl Cursor'
-                  | TopLevel_CXXMethod Cursor'
-                  | TopLevel_Constructor Cursor'
-                  | TopLevel_Destructor Cursor'
-                  | TopLevel_ConversionFunction Cursor'
-                  | TopLevel_UsingDeclaration Cursor'
-                  | TopLevel_UsingDirective Cursor'
---                  | TopLevel_FieldDecl Cursor'
---                  | TopLevel_CXXBaseSpecifier Cursor'
+data TopLevelElem = TlFunctionDecl Cursor'
+                  | TlTypedefDecl Cursor'
+                  | TlUnexposedDecl Cursor'
+                  | TlEnumDecl EnumDecl
+                  | TlStructDecl ClassDecl
+                  | TlNamespace Namespace
+                  | TlUnionDecl Cursor'
+                  | TlClassTemplate Cursor'
+                  | TlFirstAttr Cursor'
+                  | TlClassTemplatePartialSpecialization Cursor'
+                  | TlFunctionTemplate Cursor'
+                  | TlClassDecl ClassDecl
+                  | TlVarDecl Cursor'
+                  | TlCXXMethod Cursor'
+                  | TlConstructor Cursor'
+                  | TlDestructor Cursor'
+                  | TlConversionFunction Cursor'
+                  | TlUsingDeclaration Cursor'
+                  | TlUsingDirective Cursor'
+--                  | TlFieldDecl Cursor'
+--                  | TlCXXBaseSpecifier Cursor'
                   deriving Show
 
 parseNamespace :: Cursor' -> ClangApp s Namespace
@@ -357,26 +357,26 @@ parseNamespace c = do
 topLevelConstructor :: Cursor' -> Maybe (ClangApp s TopLevelElem)
 topLevelConstructor c = let simple x = Just $ return (x c) in
   case cKind c of
-    Cursor_EnumDecl      -> Just $ fmap TopLevel_EnumDecl (parseEnumDecl c)
-    Cursor_TypedefDecl   -> simple TopLevel_TypedefDecl
-    Cursor_UnexposedDecl -> simple TopLevel_UnexposedDecl
-    Cursor_ClassDecl     -> Just $ fmap TopLevel_ClassDecl (parseClass c)
-    Cursor_StructDecl    -> Just $ fmap TopLevel_StructDecl (parseStruct c)
-    Cursor_Namespace     -> Just $ fmap TopLevel_Namespace (parseNamespace c)
-    Cursor_FunctionDecl  -> simple TopLevel_FunctionDecl
-    Cursor_UnionDecl     -> simple TopLevel_UnionDecl
-    Cursor_ClassTemplate -> simple TopLevel_ClassTemplate
-    Cursor_FirstAttr     -> simple TopLevel_FirstAttr
+    Cursor_EnumDecl      -> Just $ fmap TlEnumDecl (parseEnumDecl c)
+    Cursor_TypedefDecl   -> simple TlTypedefDecl
+    Cursor_UnexposedDecl -> simple TlUnexposedDecl
+    Cursor_ClassDecl     -> Just $ fmap TlClassDecl (parseClass c)
+    Cursor_StructDecl    -> Just $ fmap TlStructDecl (parseStruct c)
+    Cursor_Namespace     -> Just $ fmap TlNamespace (parseNamespace c)
+    Cursor_FunctionDecl  -> simple TlFunctionDecl
+    Cursor_UnionDecl     -> simple TlUnionDecl
+    Cursor_ClassTemplate -> simple TlClassTemplate
+    Cursor_FirstAttr     -> simple TlFirstAttr
     Cursor_ClassTemplatePartialSpecialization ->
-      simple TopLevel_ClassTemplatePartialSpecialization
-    Cursor_FunctionTemplate -> simple TopLevel_FunctionTemplate
-    Cursor_VarDecl       -> simple TopLevel_VarDecl
-    Cursor_CXXMethod     -> simple TopLevel_CXXMethod
-    Cursor_Constructor   -> simple TopLevel_Constructor
-    Cursor_Destructor    -> simple TopLevel_Destructor
-    Cursor_ConversionFunction -> simple TopLevel_ConversionFunction
-    Cursor_UsingDeclaration -> simple TopLevel_UsingDeclaration
-    Cursor_UsingDirective -> simple TopLevel_UsingDirective
+      simple TlClassTemplatePartialSpecialization
+    Cursor_FunctionTemplate -> simple TlFunctionTemplate
+    Cursor_VarDecl       -> simple TlVarDecl
+    Cursor_CXXMethod     -> simple TlCXXMethod
+    Cursor_Constructor   -> simple TlConstructor
+    Cursor_Destructor    -> simple TlDestructor
+    Cursor_ConversionFunction -> simple TlConversionFunction
+    Cursor_UsingDeclaration -> simple TlUsingDeclaration
+    Cursor_UsingDirective -> simple TlUsingDirective
     _ -> Nothing
 
 data UnhandledTopLevel = UnhandledTopLevel { fromUtl :: (String, [Cursor']) }
@@ -420,7 +420,7 @@ parseTopLevel tu = do
 
 
 parseHeaders :: String -> [String] -> IO ([UnhandledTopLevel], [TopLevelElem])
-parseHeaders filepath args = do
+parseHeaders filepath args =
   withCreateIndex False False $ \index ->
     withParse index (Just filepath) args [] [TranslationUnit_None] parseTopLevel (error "No TXUnit!")
 
