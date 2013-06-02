@@ -10,6 +10,7 @@ module ParseHeaders ( parseHeaders
                     , ClassElem(..)
                     , UnhandledTopLevel(..)
                     , Namespace(..)
+                    , Loc(..)
                       --            , TypedefDecl(..)
                     , EnumDecl(..)
                     , Method(..)
@@ -39,11 +40,12 @@ import Data.Either ( partitionEithers )
 import Data.Map ( Map )
 import qualified Data.Map as M
 
+data Loc = Loc String Int Int Int deriving (Show, Ord, Eq)
 data Cursor' = Cursor' { cCursor :: Cursor
                        , cKind :: CursorKind
                        , cDisplayName :: String
                        , cKindSpelling :: String
-                       , cSpellingLoc :: String
+                       , cLoc :: Loc
                        }
 instance Eq Cursor' where
   Cursor' _ _ a0 a1 a2 == Cursor' _ _ b0 b1 b2 = (a0,a1,a2) == (b0,b1,b2)
@@ -51,7 +53,7 @@ instance Ord Cursor' where
   compare (Cursor' _ _ a0 a1 a2) (Cursor' _ _ b0 b1 b2) = compare (a0,a1,a2) (b0,b1,b2)
 
 instance Show Cursor' where
-  show c = "Cursor' " ++ cDisplayName c ++ " " ++ cKindSpelling c ++ " " ++ cSpellingLoc c
+  show c = "Cursor' " ++ cDisplayName c ++ " " ++ cKindSpelling c ++ " " ++ show (cLoc c)
 
 mkCursor :: Cursor -> ClangApp s Cursor'
 mkCursor c = do
@@ -60,18 +62,18 @@ mkCursor c = do
   kindSpelling <- C.getCursorKindSpelling cursorKind >>= C.unpack
   location <- C.getLocation c
   spellingLocation' <- CS.getSpellingLocation location
-  spellingLocation <- case spellingLocation' of
-    (Nothing,_,_,_) -> return "Nothing"
+  loc <- case spellingLocation' of
+    (Nothing,_,_,_) -> return $ Loc "<failtown>" (-1) (-1) (-1)
     (Just x,y,z,w) -> do
       x' <- C.getName x >>= C.unpack
-      return $ show (x',y,z,w)
-  return $ Cursor' c cursorKind displayName kindSpelling spellingLocation
+      return $ Loc x' y z w
+  return $ Cursor' c cursorKind displayName kindSpelling loc
 
 data ClassDecl = ClassDecl Cursor' [ClassElem]
 instance Show ClassDecl where
   show (ClassDecl c _) = "ClassDecl " ++ show c
 
-data EnumDecl = EnumDecl String String CT.TypeKind [Either Cursor' (String, String, Integer)]
+data EnumDecl = EnumDecl String Loc CT.TypeKind [Either Cursor' (String, Integer)]
 instance Show EnumDecl where
   show (EnumDecl tc _ _ _) = "EnumDecl " ++ tc
 data Method = Method { mName :: String
@@ -79,7 +81,7 @@ data Method = Method { mName :: String
                      , mVirtual :: Bool
                      , mRetType :: String
                      , mArgTypes :: [String]
-                     , mLoc :: String
+                     , mLoc :: Loc
                      , mContext :: [String]
                      } deriving Show
 
@@ -298,7 +300,7 @@ parseMethod cursor' = do
                 , mVirtual = virtual
                 , mRetType = retTypeSp
                 , mArgTypes = argTypesSp
-                , mLoc = cSpellingLoc cursor'
+                , mLoc = cLoc cursor'
                 , mContext = context
                 }
 
@@ -315,12 +317,12 @@ parseEnumDecl cursor' = do
         c' <- mkCursor c
         case cKind c' of Cursor_EnumConstantDecl -> do
                            v  <- getInteger c
-                           return $ oldList ++ [Right (cDisplayName c', cSpellingLoc c', v)]
+                           return $ oldList ++ [Right (cDisplayName c', v)]
                          Cursor_FirstAttr -> return $ oldList ++ [Left c']
                          k -> error $ "enum got bad type:\n" ++ show cursor' ++ "\n"
                               ++ show c' ++ "\n" ++ show k
   cl <- myVisitChildren cursor makeE []
-  return $ EnumDecl (cDisplayName cursor') (cSpellingLoc cursor') tp cl
+  return $ EnumDecl (cDisplayName cursor') (cLoc cursor') tp cl
 
 data Namespace = Namespace Cursor' [TopLevelElem] [UnhandledTopLevel]
 instance Show Namespace where

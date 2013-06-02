@@ -69,7 +69,7 @@ myParseHeaders filepath args =
 -------------------------------------------------------------------
 data CGWriterOut = CGWriterOut { cgUnhandledCe :: Map String [Cursor']
                                , cgUnhandledTle :: Map String [Cursor']
-                               , cgHaskell :: [String]
+                               , cgHaskell :: [(Loc,String)]
                                , cgBinding :: [Binding]
                                }
 cgEmpty :: CGWriterOut
@@ -81,19 +81,19 @@ reverseCg (CGWriterOut a b c d) =
 
 data Binding = Binding { bCWrapper :: String
                        , bHSWrapper :: Maybe String
-                       , bLoc :: String
+                       , bLoc :: Loc
                        , bDesc :: String
                        }
 showBinding :: Binding -> String
 showBinding (Binding csrc' hssrc' loc desc) =
   init $ unlines
-  [ "------------------ " ++ loc ++ " ----------------------"
+  [ "------------------ " ++ show loc ++ " ----------------------"
   , csrc
   , "-------------------------------------------------------"
   , hssrc
   , "-------------------------------------------------------"
   ]
-  where csrc = "// " ++ desc ++ "\n// " ++ loc ++ "\n" ++ csrc'
+  where csrc = "// " ++ desc ++ "\n// " ++ show loc ++ "\n" ++ csrc'
         hssrc = init $ unlines
                 [ "-- | "
                 , init $ unlines $ map ("-- >  " ++ ) $ lines csrc
@@ -113,30 +113,31 @@ unhandledTle ck c = do
   cg <- get
   put $ cg {cgUnhandledTle = M.insertWith (flip (++)) (show ck) [c] (cgUnhandledTle cg)}
 
-writeHaskell :: MonadState CGWriterOut m => [String] -> m ()
-writeHaskell x = do
+writeHaskell :: MonadState CGWriterOut m => Loc -> String -> m ()
+writeHaskell loc x = do
   cg <- get
-  put $ cg {cgHaskell = init $ unlines x:cgHaskell cg}
+  put $ cg {cgHaskell = (loc,x):cgHaskell cg}
 
-writeHaskell' :: (MonadIO m, MonadState CGWriterOut m) => [String] -> m ()
-writeHaskell' x = do
-  liftIO $ mapM_ putStrLn x
-  writeHaskell x
+writeHaskell' :: (MonadIO m, MonadState CGWriterOut m) => Loc -> String -> m ()
+writeHaskell' loc x = do
+  liftIO $ print loc
+  liftIO $ putStrLn x
+  writeHaskell loc x
 
-writeBinding :: MonadState CGWriterOut m => String -> Maybe String -> String -> String -> m ()
+writeBinding :: MonadState CGWriterOut m => String -> Maybe String -> Loc -> String -> m ()
 writeBinding x y loc desc = do
   cg <- get
   put $ cg {cgBinding = Binding x y loc desc:cgBinding cg}
 
-writeBinding' :: (MonadIO m, MonadState CGWriterOut m) => String -> Maybe String -> String -> String -> m ()
+writeBinding' :: (MonadIO m, MonadState CGWriterOut m) => String -> Maybe String -> Loc -> String -> m ()
 writeBinding' x y loc desc = do
   liftIO $ putStrLn $ showBinding (Binding x y loc desc)
   writeBinding x y loc desc
 
 toNiceEnum :: EnumDecl -> [(String, Integer)]
 toNiceEnum (EnumDecl name loc _ fields) = case partitionEithers fields of
-  ([], xyzs) -> map (\(x,_,z) -> (x,z)) xyzs
-  _ -> error $ "toNiceEnum: got not-nice enum: " ++ name ++ ", " ++ loc
+  ([], xyzs) -> xyzs
+  _ -> error $ "toNiceEnum: got not-nice enum: " ++ name ++ ", " ++ show loc
 
 strip :: String -> String
 strip = T.unpack . T.strip . T.pack
@@ -164,11 +165,12 @@ makeEnumInstance name elems =
 
 writeEnumDecl :: (MonadIO m, MonadState CGWriterOut m) => EnumDecl -> m ()
 writeEnumDecl ed@(EnumDecl name loc _ _) =
-  writeHaskell [ "-- EnumDecl: " ++ name ++ " " ++ loc
-               , hsEnum
-               , hsEnumInstance
-               , ""
-               ]
+  writeHaskell loc $ init $ unlines
+    [ "-- EnumDecl: " ++ name ++ " " ++ show loc
+    , hsEnum
+    , hsEnumInstance
+    , ""
+    ]
   where
     elems = toNiceEnum ed
     hsEnum = makeEnumDecl name (map fst elems)
@@ -194,7 +196,7 @@ argNames n = map (('x':) . show) [0..(n-1)]
 
 writeNonStaticClassMethod
   :: (MonadIO m, MonadState CGWriterOut m) =>
-     Bool -> String -> [String] -> String -> String -> [String] -> m ()
+     Bool -> String -> [String] -> String -> Loc -> [String] -> m ()
 writeNonStaticClassMethod virtual retTypeSp' context name loc ats' = do
   let cppType = cppContextNoTrailing context ++ " *"
       ats = cppType:ats'
@@ -212,7 +214,7 @@ writeNonStaticClassMethod virtual retTypeSp' context name loc ats' = do
 
 writeStaticClassMethod
   :: (MonadIO m, MonadState CGWriterOut m) =>
-     Bool -> String -> [String] -> String -> String -> [String] -> m ()
+     Bool -> String -> [String] -> String -> Loc -> [String] -> m ()
 writeStaticClassMethod virtual retTypeSp' context name loc ats = do
   let args = insertCommas ats
       argsWithNames = insertCommasAndNames ats
@@ -229,7 +231,7 @@ writeStaticClassMethod virtual retTypeSp' context name loc ats = do
 -- this is assumed to never be static, VarDecl is the static ones
 writeFieldDecl'
   :: (MonadIO m, MonadState CGWriterOut m) =>
-     String -> [String] -> String -> String -> m ()
+     String -> [String] -> String -> Loc -> m ()
 writeFieldDecl' retTypeSp' context name loc = do
   let cppType = cppContextNoTrailing context ++ " *"
       proto = retTypeSp' ++ " " ++ cContext context ++ name ++ "(" ++ cppType ++ " x0)"
@@ -260,7 +262,7 @@ writeFieldDecl cursor' = do
   context <- lift $ getContext cursor
 
   name <- lift $ C.getSpelling cursor >>= C.unpack
-  let loc = cSpellingLoc cursor'
+  let loc = cLoc cursor'
 
   writeFieldDecl' cursorTypeSp context name loc
 
@@ -313,7 +315,7 @@ writeClassConstructor cursor' = do
 --  name <- lift $ C.getSpelling cursor >>= C.unpack
   let contextName = cppConstructorContext context
       retType = contextName ++ " *"
-      loc = cSpellingLoc cursor'
+      loc = cLoc cursor'
       ats = argTypesSp
       args = insertCommas ats
       argsWithNames = insertCommasAndNames ats
@@ -350,7 +352,7 @@ writeClassDestructor cursor' = do
 --  name <- lift $ C.getSpelling cursor >>= C.unpack
   let contextName = cppConstructorContext context
       argType = contextName ++ " *"
-      loc = cSpellingLoc cursor'
+      loc = cLoc cursor'
       cname = cContext context ++ "delete"
       proto = "void " ++ cname ++ "(" ++ argType ++ " x0)"
       csrc = init $ unlines
@@ -400,7 +402,7 @@ writeVarDecl comment cursor' = do
                 ]
   let hsSrc = HsForeignImport (SrcLoc "<unknown>" 1 1) "ccall" HsUnsafe cname (HsIdent ("c_"++cname)) (HsTyApp (HsTyCon (UnQual (HsIdent "IO"))) (HsTyCon (UnQual (HsIdent "BadType"))))
       hsRefSrc = HsForeignImport (SrcLoc "<unknown>" 1 1) "ccall" HsUnsafe refCname (HsIdent ("c_ref_"++cname)) (HsTyApp (HsTyCon (UnQual (HsIdent "IO"))) (HsTyCon (UnQual (HsIdent "BadName"))))
-      loc = cSpellingLoc cursor'
+      loc = cLoc cursor'
   writeBinding cSrc (Just $ strip $ prettyPrint hsSrc) loc comment
   writeBinding cRefSrc (Just $ strip $ prettyPrint hsRefSrc) loc (comment ++ " (reference)")
 
