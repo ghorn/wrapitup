@@ -62,7 +62,7 @@ callWriteCode tu = do
 myParseHeaders :: String -> [String] -> IO CGWriterOut
 myParseHeaders filepath args = do
   withCreateIndex False False $ \index ->
-    withParse index (Just filepath) args [] [TranslationUnit_None] callWriteCode (error "No TXUnit!")
+    withParse index (Just filepath) args [] [TranslationUnit_None] (fmap reverseCg . callWriteCode) (error "No TXUnit!")
 
 -------------------------------------------------------------------
 data CGWriterOut = CGWriterOut { cgUnhandledCe :: Map String [Cursor']
@@ -72,6 +72,10 @@ data CGWriterOut = CGWriterOut { cgUnhandledCe :: Map String [Cursor']
                                }
 cgEmpty :: CGWriterOut
 cgEmpty = CGWriterOut M.empty M.empty [] []
+
+reverseCg :: CGWriterOut -> CGWriterOut
+reverseCg (CGWriterOut a b c d) =
+  CGWriterOut (M.map reverse a) (M.map reverse b) (reverse c) (reverse d)
 
 data Binding = Binding { bCWrapper :: String
                        , bHSWrapper :: Maybe String
@@ -100,17 +104,17 @@ type CGWriter s a = StateT CGWriterOut (ClangApp s) a
 unhandledCe :: MonadState CGWriterOut m => CursorKind -> Cursor' -> m ()
 unhandledCe ck c = do
   cg <- get
-  put $ cg {cgUnhandledCe = M.insertWith (++) (show ck) [c] (cgUnhandledCe cg)}
+  put $ cg {cgUnhandledCe = M.insertWith (flip (++)) (show ck) [c] (cgUnhandledCe cg)}
 
 unhandledTle :: MonadState CGWriterOut m => CursorKind -> Cursor' -> m ()
 unhandledTle ck c = do
   cg <- get
-  put $ cg {cgUnhandledTle = M.insertWith (++) (show ck) [c] (cgUnhandledTle cg)}
+  put $ cg {cgUnhandledTle = M.insertWith (flip (++)) (show ck) [c] (cgUnhandledTle cg)}
 
 writeHaskell :: MonadState CGWriterOut m => [String] -> m ()
 writeHaskell x = do
   cg <- get
-  put $ cg {cgHaskell = cgHaskell cg ++ [init $ unlines x]}
+  put $ cg {cgHaskell = init $ unlines x:cgHaskell cg}
 
 writeHaskell' :: (MonadIO m, MonadState CGWriterOut m) => [String] -> m ()
 writeHaskell' x = do
@@ -120,7 +124,7 @@ writeHaskell' x = do
 writeBinding :: MonadState CGWriterOut m => String -> Maybe String -> String -> String -> m ()
 writeBinding x y loc desc = do
   cg <- get
-  put $ cg {cgBinding = cgBinding cg ++ [Binding x y loc desc]}
+  put $ cg {cgBinding = Binding x y loc desc:cgBinding cg}
 
 writeBinding' :: (MonadIO m, MonadState CGWriterOut m) => String -> Maybe String -> String -> String -> m ()
 writeBinding' x y loc desc = do
