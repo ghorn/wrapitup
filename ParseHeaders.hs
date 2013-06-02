@@ -143,11 +143,11 @@ data ClassElem = Class_Method Method
                | Class_VarDecl Cursor'
                | Class_FieldDecl Cursor'
                | Class_UnexposedDecl Cursor'
-               | Class_CXXConversionFunction Cursor'
+               | Class_ConversionFunction Cursor'
                | Class_EnumDecl EnumDecl
-               | Class_StructDecl Cursor'
                | Class_FunctionTemplate Cursor'
-               | Class_ClassDecl Cursor'
+               | Class_StructDecl ClassDecl
+               | Class_ClassDecl ClassDecl
                | Class_CXXBaseSpecifier Cursor'
                | Class_CXXBoolLiteralExpr Cursor'
                | Class_UsingDeclaration Cursor'
@@ -171,11 +171,11 @@ classConstructor c = let simple x = Just $ return $ x c in
     Cursor_VarDecl            -> simple Class_VarDecl
     Cursor_FieldDecl          -> simple Class_FieldDecl
     Cursor_UnexposedDecl      -> simple Class_UnexposedDecl
-    Cursor_ConversionFunction -> simple Class_CXXConversionFunction
+    Cursor_ConversionFunction -> simple Class_ConversionFunction
     Cursor_EnumDecl           -> Just $ fmap Class_EnumDecl (parseEnumDecl c)
     Cursor_FunctionTemplate   -> simple Class_FunctionTemplate
-    Cursor_StructDecl         -> simple Class_StructDecl
-    Cursor_ClassDecl          -> simple Class_ClassDecl
+    Cursor_StructDecl         -> Just $ fmap Class_StructDecl (parseStruct c)
+    Cursor_ClassDecl          -> Just $ fmap Class_ClassDecl (parseClass c)
     Cursor_CXXBaseSpecifier   -> simple Class_CXXBaseSpecifier
     Cursor_UsingDeclaration   -> simple Class_UsingDeclaration
     Cursor_CXXBoolLiteralExpr -> simple Class_CXXBoolLiteralExpr
@@ -339,7 +339,7 @@ data TopLevelElem = TopLevel_FunctionDecl Cursor'
                   | TopLevel_FunctionTemplate Cursor'
                   | TopLevel_ClassDecl ClassDecl
                   | TopLevel_VarDecl Cursor'
-                  | TopLevel_CXXMethod Method
+                  | TopLevel_CXXMethod Cursor'
                   | TopLevel_Constructor Cursor'
                   | TopLevel_Destructor Cursor'
                   | TopLevel_ConversionFunction Cursor'
@@ -371,7 +371,7 @@ topLevelConstructor c = let simple x = Just $ return (x c) in
       simple TopLevel_ClassTemplatePartialSpecialization
     Cursor_FunctionTemplate -> simple TopLevel_FunctionTemplate
     Cursor_VarDecl       -> simple TopLevel_VarDecl
-    Cursor_CXXMethod     -> Just $ fmap TopLevel_CXXMethod (parseMethod c)
+    Cursor_CXXMethod     -> simple TopLevel_CXXMethod
     Cursor_Constructor   -> simple TopLevel_Constructor
     Cursor_Destructor    -> simple TopLevel_Destructor
     Cursor_ConversionFunction -> simple TopLevel_ConversionFunction
